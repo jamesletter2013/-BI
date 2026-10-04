@@ -114,7 +114,8 @@ export const OpportunityPanel = forwardRef<
   }, []);
   const seq = useRef(0),
     transcript = useRef<HTMLDivElement>(null),
-    composer = useRef<HTMLTextAreaElement>(null);
+    composer = useRef<HTMLTextAreaElement>(null),
+    composing = useRef(false);
   function pushData() {
     if (pending.current) {
       setNotice('分析进行中，请完成或取消后再更新资料。');
@@ -408,7 +409,7 @@ export const OpportunityPanel = forwardRef<
           aria-label="机会建议列表"
         >
           <header className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3">
-            <h3 className="font-semibold">分析建议</h3>
+            <h3 className="font-semibold">最终建议</h3>
             <span className="text-sm text-primary">
               {sending
                 ? '正在分析 · 完成后自动更新'
@@ -455,26 +456,11 @@ export const OpportunityPanel = forwardRef<
                       <h4 className="break-words text-base font-semibold">
                         {s.title}
                       </h4>
-                      {s.priority && (
-                        <p className="mt-1 text-sm text-primary">
-                          优先级：{s.priority}
-                        </p>
-                      )}
                     </div>
                   </div>
-                  {s.evidence && (
-                    <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-6 text-muted-foreground">
-                      依据：{s.evidence}
-                    </p>
-                  )}
                   <p className="mt-3 whitespace-pre-wrap break-words text-base leading-7">
                     {s.action}
                   </p>
-                  {s.validation && (
-                    <p className="mt-3 whitespace-pre-wrap break-words rounded-lg bg-secondary p-3 text-sm leading-6">
-                      验证：{s.validation}
-                    </p>
-                  )}
                   <button
                     type="button"
                     onClick={() => {
@@ -609,14 +595,22 @@ export const OpportunityPanel = forwardRef<
                 disabled={sending}
                 value={question}
                 onChange={(e) => setQuestion(e.target.value)}
+                onCompositionStart={() => {
+                  composing.current = true;
+                }}
+                onCompositionEnd={() => {
+                  composing.current = false;
+                }}
                 onKeyDown={(event) => {
                   if (
                     event.key === 'Enter' &&
-                    (event.metaKey || event.ctrlKey) &&
-                    !event.nativeEvent.isComposing
+                    !event.shiftKey &&
+                    !composing.current &&
+                    !event.nativeEvent.isComposing &&
+                    event.nativeEvent.keyCode !== 229
                   ) {
                     event.preventDefault();
-                    submitComposer();
+                    if (!event.repeat) submitComposer();
                   }
                 }}
                 maxLength={6000}
@@ -724,8 +718,8 @@ export const OpportunityPanel = forwardRef<
                       aria-label={canSendAI ? '发送并生成建议' : '加入草稿'}
                       title={
                         canSendAI
-                          ? '发送并生成建议（⌘ / Ctrl + Enter）'
-                          : '加入草稿（不调用 AI）'
+                          ? '发送并生成建议（Enter 发送，Shift+Enter 换行）'
+                          : '加入草稿（Enter 发送，不调用 AI）'
                       }
                       disabled={!packet || (!canSendAI && !question.trim())}
                       className="grid size-9 place-items-center rounded-full bg-primary text-white transition-colors hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-35"
@@ -735,6 +729,9 @@ export const OpportunityPanel = forwardRef<
                   )}
                 </div>
               </div>
+              <p className="mt-1 text-right text-xs text-muted-foreground">
+                Enter 发送 · Shift+Enter 换行
+              </p>
             </form>
             <p
               role="status"
@@ -801,8 +798,8 @@ export const OpportunityPanel = forwardRef<
                 条对话及当前问题；超长不会自动删减。更新资料会清空这一轮对话。
               </p>
               <p className="text-muted-foreground">
-                仅本页暂存；刷新或切换商品前请先从「更多」复制或下载。⌘ / Ctrl +
-                Enter 提交，Enter 换行。
+                仅本页暂存；刷新或切换商品前请先从「更多」复制或下载。 Enter
+                发送，Shift+Enter 换行。中文输入法选字时不会发送。
               </p>
             </div>
           )}
