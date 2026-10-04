@@ -14,8 +14,9 @@ export type AIStatus = {
   limits: {
     inputCharacters: number;
     outputTokens: number;
-    userDaily: number;
-    teamDaily: number;
+    // null is an explicit administrator opt-in to unlimited daily attempts.
+    userDaily: number | null;
+    teamDaily: number | null;
   };
 };
 export type AIHistoryMessage = { role: 'user' | 'assistant'; content: string };

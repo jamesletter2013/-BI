@@ -783,10 +783,17 @@ export const OpportunityPanel = forwardRef<
               </p>
               {ai && (
                 <p>
-                  每日每人最多 {ai.limits.userDaily} 次 / 团队{' '}
-                  {ai.limits.teamDaily} 次；最多 6 万字符输入、
+                  每人每日{' '}
+                  {ai.limits.userDaily === null
+                    ? '不限次数'
+                    : `最多 ${ai.limits.userDaily} 次`}{' '}
+                  / 团队每日{' '}
+                  {ai.limits.teamDaily === null
+                    ? '不限次数'
+                    : `最多 ${ai.limits.teamDaily} 次`}
+                  ；最多 6 万字符输入、
                   {ai.limits.outputTokens} tokens
-                  输出。失败尝试也计入次数；不是金额上限。
+                  输出。仍保留调用记录；费用按服务商实际用量计算，不是金额上限。
                 </p>
               )}
               <p>
@@ -839,9 +846,15 @@ export const OpportunityPanel = forwardRef<
               </p>
               {ai && (
                 <p className="text-muted-foreground">
-                  使用公司额度：每人每日 {ai.limits.userDaily} 次，团队每日{' '}
-                  {ai.limits.teamDaily}{' '}
-                  次。失败尝试也计入次数；取消后服务商可能已计费。
+                  使用公司额度：每人每日{' '}
+                  {ai.limits.userDaily === null
+                    ? '不限次数'
+                    : `${ai.limits.userDaily} 次`}
+                  ，团队每日{' '}
+                  {ai.limits.teamDaily === null
+                    ? '不限次数'
+                    : `${ai.limits.teamDaily} 次`}
+                  。 费用按实际用量计算；取消后服务商可能已计费。
                 </p>
               )}
               <label className="flex items-start gap-2">
