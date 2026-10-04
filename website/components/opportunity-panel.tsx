@@ -22,7 +22,12 @@ import {
   FileText,
   Square,
 } from 'lucide-react';
-import type { AIStatus, AIResponse } from '@/lib/ai/types';
+import type { AIStatus } from '@/lib/ai/types';
+import { readAnalysisResponse } from '@/lib/ai/stream';
+import {
+  AnalysisRunCard,
+  type AnalysisRun,
+} from '@/components/analysis-run-card';
 import {
   Dialog,
   DialogContent,
@@ -52,8 +57,11 @@ import {
 type Message = {
   id: number;
   text: string;
-  kind: 'question' | 'reply' | 'api';
+  kind: 'question' | 'reply' | 'api' | 'run';
   sent?: boolean;
+  failed?: boolean;
+  requestId?: string;
+  run?: AnalysisRun;
   label?: string;
 };
 export type OpportunityPanelHandle = { pushData: () => void };
@@ -231,6 +239,7 @@ export const OpportunityPanel = forwardRef<
     }
     const currentQuestion = question.trim(),
       history = messages
+        .filter((m) => m.kind !== 'run' && !m.failed)
         .slice(-12)
         .map((m) => ({
           role: m.kind === 'question' ? 'user' : 'assistant',
@@ -253,19 +262,63 @@ export const OpportunityPanel = forwardRef<
     }
     const controller = new AbortController();
     pending.current = controller;
+    const runId = ++seq.current,
+      questionId = ++seq.current;
+    const run: AnalysisRun = {
+      requestId: body.requestId,
+      stage: 'connecting',
+      status: 'pending',
+      startedAt: Date.now(),
+      question: currentQuestion,
+    };
+    setMessages((m) => [
+      ...m,
+      {
+        id: questionId,
+        kind: 'question',
+        text: currentQuestion || '请分析本次商品资料，生成可执行的建议。',
+        sent: true,
+        requestId: body.requestId,
+      },
+      { id: runId, kind: 'run', text: '', run },
+    ]);
+    setQuestion('');
     setSending(true);
     setNotice('正在分析文字资料，请稍候；不会自动重试。');
+    function updateRun(patch: Partial<AnalysisRun>) {
+      if (!alive.current) return;
+      setMessages((m) =>
+        m.map((item) =>
+          item.id === runId && item.run
+            ? { ...item, run: { ...item.run, ...patch } }
+            : item,
+        ),
+      );
+    }
+    function scrollToLatest() {
+      requestAnimationFrame(() =>
+        transcript.current?.scrollTo({
+          top: transcript.current.scrollHeight,
+          behavior: 'smooth',
+        }),
+      );
+    }
+    scrollToLatest();
     const timeout = setTimeout(() => controller.abort(), 100000);
     try {
       const response = await fetch('/api/ai/analyze', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/x-ndjson',
+        },
         body: JSON.stringify(body),
         signal: controller.signal,
       });
-      const result = (await response.json()) as AIResponse;
-      if (!response.ok)
-        throw new Error(result?.error?.message || '分析暂时失败，资料已保留。');
+      const result = await readAnalysisResponse(response, (stage) => {
+        updateRun({ stage });
+        scrollToLatest();
+      });
       if (
         result.itemId !== packet.itemId ||
         result.requestId !== body.requestId
@@ -275,26 +328,21 @@ export const OpportunityPanel = forwardRef<
       if (!alive.current) return;
       setSuggestions(parsed);
       setSuggestionOrigin(`来自 ${result.provider}`);
+      updateRun({
+        status: 'success',
+        finishedAt: Date.now(),
+        count: parsed.length,
+      });
+      const replyId = ++seq.current;
       setMessages((m) => [
-        ...m.map((item) => ({ ...item, sent: true })),
-        ...(currentQuestion
-          ? [
-              {
-                id: ++seq.current,
-                text: currentQuestion,
-                kind: 'question' as const,
-                sent: true,
-              },
-            ]
-          : []),
+        ...m.map((item) => (item.failed ? item : { ...item, sent: true })),
         {
-          id: ++seq.current,
+          id: replyId,
           text: result.text,
           kind: 'api',
           label: `${result.provider} · ${result.model}`,
         },
       ]);
-      setQuestion('');
       setNotice(
         `已生成 ${parsed.length} 条建议。${result.notice}${result.usage?.inputTokens != null ? ` 输入 ${result.usage.inputTokens} / 输出 ${result.usage.outputTokens ?? '未知'} tokens。` : ''}`,
       );
@@ -305,14 +353,21 @@ export const OpportunityPanel = forwardRef<
         }),
       );
     } catch (error) {
-      if (alive.current)
-        setNotice(
-          controller.signal.aborted
-            ? '分析已取消或超时；服务商可能已计费。资料与原有建议保留，不会自动重试。'
-            : error instanceof Error
-              ? error.message
-              : '发送失败，资料已保留。',
+      if (alive.current) {
+        const message = controller.signal.aborted
+          ? '分析已取消或超时；服务商可能已计费。资料与原有建议保留，不会自动重试。'
+          : error instanceof Error
+            ? error.message
+            : '发送失败，资料已保留。';
+        updateRun({ status: 'failed', finishedAt: Date.now(), error: message });
+        setMessages((m) =>
+          m.map((item) =>
+            item.id === questionId ? { ...item, failed: true } : item,
+          ),
         );
+        setNotice(message);
+        scrollToLatest();
+      }
     } finally {
       clearTimeout(timeout);
       pending.current = null;
@@ -355,9 +410,11 @@ export const OpportunityPanel = forwardRef<
           <header className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3">
             <h3 className="font-semibold">分析建议</h3>
             <span className="text-sm text-primary">
-              {suggestions.length
-                ? `${suggestions.length} 条 · ${suggestionOrigin}`
-                : '等待分析回复'}
+              {sending
+                ? '正在分析 · 完成后自动更新'
+                : suggestions.length
+                  ? `${suggestions.length} 条 · ${suggestionOrigin}`
+                  : '等待分析回复'}
             </span>
           </header>
           <div
@@ -366,14 +423,22 @@ export const OpportunityPanel = forwardRef<
           >
             {!suggestions.length ? (
               <div className="rounded-xl border border-dashed border-input bg-white p-6 text-center">
-                <ListChecks className="mx-auto size-8 text-primary" />
+                {sending ? (
+                  <LoaderCircle className="mx-auto size-8 animate-spin text-primary" />
+                ) : (
+                  <ListChecks className="mx-auto size-8 text-primary" />
+                )}
                 <h4 className="mt-3 font-semibold">
-                  分析完成后，建议会显示在这里
+                  {sending
+                    ? '正在分析你的资料'
+                    : '分析完成后，建议会显示在这里'}
                 </h4>
                 <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                  {packet
-                    ? '资料已准备好。右侧发送分析，或粘贴现有 AI 回复，即可整理为建议卡片。'
-                    : '先推送上方商品资料。这里保留给基于实际资料的分析建议。'}
+                  {sending
+                    ? '右侧可查看实时处理阶段。收到有效回复后，建议会自动显示在这里。'
+                    : packet
+                      ? '资料已准备好。右侧发送分析，或粘贴现有 AI 回复，即可整理为建议卡片。'
+                      : '先推送上方商品资料。这里保留给基于实际资料的分析建议。'}
                 </p>
               </div>
             ) : (
@@ -471,7 +536,9 @@ export const OpportunityPanel = forwardRef<
                         ? '发送中'
                         : messages.some((m) => m.kind === 'api')
                           ? '已用于分析'
-                          : '待发送'}
+                          : messages.some((m) => m.kind === 'run')
+                            ? '上次分析未完成'
+                            : '待发送'}
                     </span>
                   </span>
                   <span className="mt-1 line-clamp-2 block text-xs leading-5 text-muted-foreground">
@@ -481,42 +548,48 @@ export const OpportunityPanel = forwardRef<
                 <ChevronDown className="mt-1 size-4 shrink-0 text-muted-foreground" />
               </button>
             )}
-            {messages.map((m) => (
-              <article
-                key={m.id}
-                className={`rounded-2xl p-3 ${m.kind !== 'question' ? 'mr-3 border border-border bg-white' : 'ml-3 bg-secondary'}`}
-              >
-                <p className="mb-2 text-xs font-medium text-primary">
-                  {m.kind === 'api'
-                    ? `${m.label} · 需人工核实`
-                    : m.kind === 'reply'
-                      ? 'AI 回复 · 手动粘贴，未核验'
-                      : `我的问题 · ${m.sent ? '已发送' : '待发送'}`}
-                </p>
-                {m.kind !== 'question' ? (
-                  <details>
-                    <summary className="cursor-pointer text-sm">
-                      查看回复原文
-                    </summary>
-                    <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 [overflow-wrap:anywhere]">
+            {messages.map((m) =>
+              m.kind === 'run' && m.run ? (
+                <AnalysisRunCard
+                  key={m.id}
+                  run={m.run}
+                  disabled={sending}
+                  onEdit={() => {
+                    setQuestion(
+                      m.run?.question ||
+                        '请分析本次商品资料，生成可执行的建议。',
+                    );
+                    composer.current?.focus({ preventScroll: true });
+                  }}
+                />
+              ) : (
+                <article
+                  key={m.id}
+                  className={`rounded-2xl p-3 ${m.kind !== 'question' ? 'mr-3 border border-border bg-white' : 'ml-3 bg-secondary'}`}
+                >
+                  <p className="mb-2 text-xs font-medium text-primary">
+                    {m.kind === 'api'
+                      ? `${m.label} · 需人工核实`
+                      : m.kind === 'reply'
+                        ? 'AI 回复 · 手动粘贴，未核验'
+                        : `我的问题 · ${m.failed ? '本次未完成' : m.sent ? '已提交' : '待发送'}`}
+                  </p>
+                  {m.kind !== 'question' ? (
+                    <details>
+                      <summary className="cursor-pointer text-sm">
+                        查看回复原文
+                      </summary>
+                      <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 [overflow-wrap:anywhere]">
+                        {m.text}
+                      </p>
+                    </details>
+                  ) : (
+                    <p className="whitespace-pre-wrap break-words text-sm leading-6">
                       {m.text}
                     </p>
-                  </details>
-                ) : (
-                  <p className="whitespace-pre-wrap break-words text-sm leading-6">
-                    {m.text}
-                  </p>
-                )}
-              </article>
-            ))}
-            {sending && (
-              <p
-                className="flex items-center gap-2 text-sm text-primary"
-                role="status"
-              >
-                <LoaderCircle className="size-4 animate-spin" />
-                正在分析文字资料…
-              </p>
+                  )}
+                </article>
+              ),
             )}
           </div>
           <div className="shrink-0 p-3 pt-1" data-testid="analysis-composer">
