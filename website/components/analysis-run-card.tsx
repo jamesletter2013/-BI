@@ -6,7 +6,7 @@ import type { AIStage } from '@/lib/ai/types';
 
 export type AnalysisRun = {
   requestId: string;
-  stage: AIStage | 'connecting';
+  stage: AIStage | 'connecting' | 'confirming';
   status: 'pending' | 'success' | 'failed';
   startedAt: number;
   finishedAt?: number;
@@ -15,9 +15,10 @@ export type AnalysisRun = {
   question: string;
 };
 const labels = {
+  confirming: '请在当前对话框确认接收域名和费用',
   connecting: '正在提交到分析服务',
   validating: '服务器已接收，正在检查资料和额度',
-  requesting: '正在连接 DeepSeek，等待分析回复',
+  requesting: '正在连接所选 AI，等待分析回复',
   organizing: '已收到 AI 回复，正在整理建议',
 };
 

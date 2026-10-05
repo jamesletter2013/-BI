@@ -1,7 +1,7 @@
 // Self-contained: Chrome serializes this function into the product's MAIN world.
 // Only two read APIs are allowed. No cookies, signing, eval, third-party plugin
 // internals, UI actions or raw response/profile data cross the extension bridge.
-export async function qaPageRequest(itemId, descriptor = null, contextId = '') {
+export async function qaPageRequest(itemId, descriptor = null, contextId = '', allowVerification = false) {
   const bad = code => ({ ok: false, code });
   const validId = v => (typeof v === 'string' && /^[1-9]\d{0,31}$/.test(v))
     || (Number.isSafeInteger(v) && v > 0);
@@ -28,10 +28,23 @@ export async function qaPageRequest(itemId, descriptor = null, contextId = '') {
       && (!c.subDomain || c.subDomain === 'm') && (!c.prefix || c.prefix === 'h5api');
   };
   const failure = value => {
-    const codes = Array.isArray(value?.ret) ? value.ret.filter(x => typeof x === 'string').join(',') : '';
+    const codes = Array.isArray(value?.ret) ? value.ret.filter(x => typeof x === 'string').map(x => x.split('::')[0]).join(',') : '';
+    if (/USER_INPUT_CANCEL/.test(codes)) return bad('verification_cancelled');
+    if (/USER_INPUT_FAILURE/.test(codes)) return bad('verification_required');
     if (/SESSION_EXPIRED|SID_INVALID|AUTH_REJECT|NEED_LOGIN|NOT_LOGIN|TOKEN_EMPTY|TOKEN_EXPIRED/.test(codes)) return bad('login_required');
-    if (/VALIDATE|RGV587|ASSIST_FLAG|ANTI|ILLEGAL_ACCESS|ACCESS_DENIED|USER_VALIDATE/.test(codes)) return bad('verification_required');
+    if (/VALIDATE|RGV587|ASSIST_FLAG|USER_VALIDATE/.test(codes)) {
+      let canOpenVerification = false;
+      try {
+        const url = new URL(value?.data?.url);
+        canOpenVerification = /RGV587|ASSIST_FLAG/.test(codes) && url.protocol === 'https:' && !url.username && !url.password
+          && ['taobao.com','tmall.com'].some(d => url.hostname === d || url.hostname.endsWith('.' + d))
+          && typeof window.lib?.mtop?.antiCreepRequest === 'function';
+      } catch {}
+      // Only a boolean crosses to the extension, never the challenge URL/token.
+      return { ...bad('verification_required'), canOpenVerification };
+    }
     if (/LIMIT|FREQUENT|TRAFFIC/.test(codes)) return bad('rate_limited');
+    if (/ANTI|ILLEGAL_ACCESS|ACCESS_DENIED/.test(codes)) return bad('access_denied');
     return bad('upstream_unsuccessful');
   };
   try {
@@ -117,12 +130,14 @@ export async function qaPageRequest(itemId, descriptor = null, contextId = '') {
       const reject = raw => finish(failure(raw));
       // Local timeout bounds even a callback-only or broken SDK. A late SDK
       // response is ignored; no retries or UI challenges are started by us.
-      timer = setTimeout(() => finish(bad('request_timeout')), 12000);
+      timer = setTimeout(() => finish(bad(allowVerification ? 'verification_timeout' : 'request_timeout')), allowVerification ? 120000 : 12000);
       try {
         const returned = sdk.request({ api: descriptor.api, v: descriptor.version, data,
           appKey: '12574478', type: 'GET', dataType: 'jsonp', ecode: 0, timeout: 10000,
           H5Request: true, WindVaneRequest: false, LoginRequest: false, needLogin: false,
-          AntiCreep: false, AntiFlood: false, AntiFlool: false }, success, reject);
+          // The platform's own inline verification dialog handles user input.
+          // Never click, solve, forge a completion event, or enable redirects.
+          AntiCreep: allowVerification === true, AntiFlood: false, AntiFlool: false }, success, reject);
         if (returned && typeof returned.then === 'function') returned.then(success, reject);
       } catch { finish(bad('transport_failed')); }
     });

@@ -6,14 +6,49 @@ import { createReviewStore } from './review-store.mjs';
 import { freshQaCheckpoint, validQaCheckpoint, qaResultFromCheckpoint } from './qa-request-flow.mjs';
 
 const prefix = 'taoa-reviews:';
+const qaContinueMs = 1000;
+const reviewContinueMs = 10000;
 const unsafeResume = new Set(['record_limit', 'size_limit', 'page_limit', 'range_exhausted', 'repeated_page',
   'empty_page', 'pagination_unknown', 'invalid_checkpoint']);
 export function createReviewJobs({ browser = chrome, store = createReviewStore(), publish = async () => {},
-  combined = collectFeedbackInBackground, reviews = collectReviewsInBackground, onComplete = async () => {} } = {}) {
+  combined = collectFeedbackInBackground, reviews = collectReviewsInBackground, onComplete = async () => {},
+  schedule = setTimeout, cancel = clearTimeout, allowInteractiveVerification = false } = {}) {
   let busy = null, starting = false, tickPromise = null;
   const paused = new Set();
+  const continuations = new Map();
   const alarm = (id, minutes) => browser.alarms.create(prefix + id, { delayInMinutes: minutes });
-  const clear = id => browser.alarms.clear(prefix + id);
+  const clearContinuation = id => {
+    const timer = continuations.get(id);
+    if (timer) cancel(timer.handle);
+    continuations.delete(id);
+  };
+  const clear = id => { clearContinuation(id); return browser.alarms.clear(prefix + id); };
+  // A short, best-effort continuation for successful saved batches. Keep the
+  // durable alarm as a fallback if the worker sleeps; never retry a failed page.
+  function continueSaved(job) {
+    clearContinuation(job.itemId);
+    const timer = { handle: null };
+    continuations.set(job.itemId, timer);
+    timer.handle = schedule(() => {
+      return (async () => {
+        const live = await store.get(job.itemId);
+        if (continuations.get(job.itemId) !== timer) return;
+        continuations.delete(job.itemId);
+        if (!live || live.id !== job.id || live.phase !== 'queued' || live.stage !== job.stage
+          || live.reason !== 'batch_limit' || paused.has(live.id)) return;
+        if (busy || starting || tickPromise) { continueSaved(live); return; }
+        await tick(live.itemId);
+      })().catch(() => { /* The durable alarm will recheck stored state. */ });
+    }, job.stage === 'qa' ? qaContinueMs : reviewContinueMs);
+  }
+  async function scheduleSaved(job) {
+    await save(job); await clear(job.itemId);
+    if (job.phase !== 'queued') return;
+    // Packaged Chromium alarms have a 30-second minimum; the short timer
+    // supplies the normal 10-second review wait without relying on that alarm.
+    await alarm(job.itemId, job.stage === 'qa' ? 1 : 0.5);
+    continueSaved(job);
+  }
   const emit = async job => { try { await publish(publicResult(job)); } catch {} };
   function publicResult(job) {
     const result = captureFromCheckpoint(job.checkpoint, job.reason, job.diagnostics || {});
@@ -21,9 +56,12 @@ export function createReviewJobs({ browser = chrome, store = createReviewStore()
     result.job = { id: job.id, state: job.phase === 'queued' || job.phase === 'executing' ? 'running' : job.phase,
       stage: job.stage === 'qa' ? 'qa' : 'reviews',
       canResume: job.phase === 'paused' && !unsafeResume.has(job.reason),
-      updatedAt: job.updatedAt, nextRunAt: job.nextRunAt || '' };
+      updatedAt: job.updatedAt, nextRunAt: job.nextRunAt || '', reason: job.reason,
+      verificationPending: job.verificationPending === true };
     if (job.message) result.message = job.message;
-    if (job.phase === 'queued') result.message = '本批已保存，约 1 分钟后继续下一批；无需保持工作台打开。';
+    if (job.phase === 'queued') result.message = job.stage === 'qa'
+      ? '问大家进度已保存，正在自动连续采集；无需保持工作台打开。'
+      : '本批已保存，约 10 秒后继续下一批；无需保持工作台打开。';
     if (job.phase === 'executing') result.message = '正在后台读取，已保存的进度如下。';
     if (job.stage === 'qa') result.message = `先采问大家（已读 ${job.qa?.items?.length || 0} 个问题），评价等待中。${result.message || ''}`;
     return result;
@@ -36,10 +74,12 @@ export function createReviewJobs({ browser = chrome, store = createReviewStore()
   }
   function qaOptions(job) {
     return { checkpoint: job.qaCheckpoint, binding: job.qaBinding, shouldStop: () => paused.has(job.id),
+      allowInteractiveVerification,
+      onVerification: async active => { job.verificationPending = active; await save(job); await emit(job); },
       onCheckpoint: async checkpoint => {
         const parsed = qaResultFromCheckpoint(checkpoint);
         const next = { ...job, qaCheckpoint: checkpoint, qa: parsed ? { ...parsed.capture,
-          capturedAt: new Date().toISOString(), message: `${parsed.capture.message}问大家分批采集中，评价等待中。` } : job.qa };
+          capturedAt: new Date().toISOString(), message: `${parsed.capture.message}问大家连续采集中，评价等待中。` } : job.qa };
         await save(next); Object.assign(job, next); await emit(job);
       } };
   }
@@ -58,9 +98,8 @@ export function createReviewJobs({ browser = chrome, store = createReviewStore()
       if (paused.has(job.id) && job.reason === 'batch_limit') job.reason = 'manual_paused';
       job.phase = job.reason === 'batch_limit' && job.qaBinding ? 'queued' : 'paused';
       job.message = result.qa.message;
-      job.nextRunAt = job.phase === 'queued' ? new Date(Date.now() + 60000).toISOString() : '';
-      await save(job); await clear(job.itemId);
-      if (job.phase === 'queued') await alarm(job.itemId, 1);
+      job.nextRunAt = job.phase === 'queued' ? new Date(Date.now() + qaContinueMs).toISOString() : '';
+      await scheduleSaved(job);
       await emit(job); return publicResult(job);
     }
     job.stage = 'reviews';
@@ -77,14 +116,14 @@ export function createReviewJobs({ browser = chrome, store = createReviewStore()
     const complete = ['complete_scope', 'empty_scope'].includes(result.status);
     job.phase = job.reason === 'range_exhausted' ? 'exhausted' : complete ? 'complete' : job.reason === 'batch_limit' && job.binding ? 'queued' : 'paused';
     if (job.reason === 'manual_paused') job.message = REVIEW_MESSAGES.manual_paused;
-    job.nextRunAt = job.phase === 'queued' ? new Date(Date.now() + 60000).toISOString() : '';
-    await save(job); await clear(job.itemId);
-    if (job.phase === 'queued') await alarm(job.itemId, 1);
+    job.nextRunAt = job.phase === 'queued' ? new Date(Date.now() + reviewContinueMs).toISOString() : '';
+    await scheduleSaved(job);
     await emit(job);
     if (complete) await onComplete(job);
     return publicResult(job);
   }
   async function fail(job, reason = 'interrupted') {
+    job.verificationPending = false;
     job.phase = 'paused'; job.reason = reason; job.message = REVIEW_MESSAGES[reason];
     job.checkpoint.reason = reason; job.nextRunAt = '';
     await clear(job.itemId);
@@ -147,6 +186,7 @@ export function createReviewJobs({ browser = chrome, store = createReviewStore()
     if (job.stage === 'qa' && !validQaCheckpoint(job.qaCheckpoint, itemId)) return fail(job, 'invalid_checkpoint');
     if (busy) { await alarm(itemId, 1); return; }
     if (job.phase === 'executing') return fail(job, 'interrupted');
+    clearContinuation(itemId);
     job.phase = 'executing'; job.nextRunAt = ''; await save(job); await alarm(itemId, 3);
     const promise = (async () => {
       try {
@@ -178,7 +218,15 @@ export function createReviewJobs({ browser = chrome, store = createReviewStore()
   async function recover() {
     for (const job of await store.list()) {
       if (job.phase === 'executing' || job.phase === 'queued' && job.checkpoint?.version !== 3) await fail(job, 'interrupted');
-      else if (job.phase === 'queued') await alarm(job.itemId, 1);
+      else if (job.phase === 'queued') {
+        if (job.stage === 'qa' && job.reason === 'batch_limit') {
+          job.nextRunAt = new Date(Date.now() + qaContinueMs).toISOString();
+          await scheduleSaved(job); await emit(job);
+        } else {
+          job.nextRunAt = new Date(Date.now() + reviewContinueMs).toISOString();
+          await scheduleSaved(job); await emit(job);
+        }
+      }
     }
   }
   return { initial, tick, control, recover, prefix, publicResult,

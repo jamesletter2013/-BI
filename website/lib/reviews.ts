@@ -1,4 +1,4 @@
-import { validateQuestions, type QuestionsCapture } from './questions';
+import { collectionReasons, validateQuestions, type QuestionsCapture } from './questions';
 export type Review = { id:string; itemId:string; feedback:string; feedbackDate:string; sku:string; rateType:string;
   isDefault:boolean; textKind:'content'|'default'|'template'|'empty'; images:string[]; video:string; textTruncated:boolean;
   append:null|{feedback:string;date:string;intervalDay:string;reply:string;images:string[];video:string};
@@ -11,7 +11,7 @@ export type ReviewScope = {scope:string;pages:number;readCount:number;total:numb
   timePeriod:string;folded:number|null;history:string;complete:boolean;ended:boolean;reason:string};
 export type ReviewsCapture = {itemId:string;status:string;items:Review[];scopes:ReviewScope[];message:string;capturedAt:string;qa?:QuestionsCapture|null;
   coverage?:{mode:'recent';discoveryDone:boolean;availableScopes:string[];supplementalAdded:number;fullCoverageVerified:false;requestProfile?:string;retainedCount?:number;addedSinceStart?:number};
-  pageTrace?:ReviewPage[];job?:{id:string;state:string;stage?:string;canResume:boolean;updatedAt:string;nextRunAt:string};progress?:{nextPage:number;scope:string;savedCount:number}};
+  pageTrace?:ReviewPage[];job?:{id:string;state:string;stage?:string;canResume:boolean;updatedAt:string;nextRunAt:string;reason?:string;verificationPending?:boolean};progress?:{nextPage:number;scope:string;savedCount:number}};
 const text=(x:unknown,n=5000)=>typeof x==='string'?x.trim().slice(0,n):'';
 const object=(x:unknown):Record<string,unknown>|null=>x!==null&&typeof x==='object'&&!Array.isArray(x)?x as Record<string,unknown>:null;
 const id=(x:unknown)=>typeof x==='string'&&/^[1-9]\d{0,31}$/.test(x);
@@ -54,7 +54,8 @@ export function validateReviews(value:unknown,itemId:string):ReviewsCapture|null
   if((status==='complete_scope'||status==='empty_scope')&&(!complete||dropped||x.items.length>10000||(status==='empty_scope'&&items.length>0)))status=items.length?'partial':'unavailable';
   const j=object(x.job),p=object(x.progress);
   const job=j&&typeof j.id==='string'&&/^[a-f0-9-]{36}$/.test(j.id)&&['running','paused','complete','exhausted'].includes(String(j.state))
-    ?{id:j.id,state:String(j.state),stage:j.stage==='qa'?'qa':'reviews',canResume:j.canResume===true,updatedAt:text(j.updatedAt,80),nextRunAt:text(j.nextRunAt,80)}:undefined;
+    ?{id:j.id,state:String(j.state),stage:j.stage==='qa'?'qa':'reviews',canResume:j.canResume===true,updatedAt:text(j.updatedAt,80),nextRunAt:text(j.nextRunAt,80),
+      reason:collectionReasons.has(String(j.reason))?String(j.reason):undefined,verificationPending:j.verificationPending===true}:undefined;
   const progress=p&&[...scopeKeys,''].includes(String(p.scope))?{nextPage:count(p.nextPage)||1,
     scope:scopes.some(s=>s.scope===p.scope&&s.ended)?'':String(p.scope),savedCount:items.length}:undefined;
   const pageTrace:ReviewPage[]=Array.isArray(x.pageTrace)?x.pageTrace.slice(-100).map(object).filter(p=>p&&scopeKeys.includes(String(p.scope))&&count(p.page)!==null&&count(p.returned)!==null&&count(p.added)!==null).map(p=>({

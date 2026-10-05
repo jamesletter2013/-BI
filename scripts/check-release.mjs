@@ -4,8 +4,9 @@ import assert from 'node:assert/strict';
 import {fileURLToPath} from 'node:url';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..'),extension=path.join(root,'extension');
 const manifest=JSON.parse(fs.readFileSync(path.join(extension,'manifest.json'),'utf8'));
-assert.equal(manifest.version,'1.0.12');
+assert.equal(manifest.version,'1.3.6');
 for(const ref of [manifest.background.service_worker,...Object.values(manifest.icons),...manifest.content_scripts.flatMap(s=>s.js)])assert(fs.existsSync(path.join(extension,ref)),`Missing manifest file: ${ref}`);
+for(const ref of ['api-background.js','api-worker.js','api-offscreen.js','offscreen.html'])assert(fs.existsSync(path.join(extension,ref)),`Missing AI executor: ${ref}`);
 const files=[];
 function walk(dir){for(const ent of fs.readdirSync(dir,{withFileTypes:true})){if(['.git','node_modules','dist','.wrangler','.next','.vinext'].includes(ent.name))continue;const full=path.join(dir,ent.name);if(ent.isDirectory())walk(full);else files.push(full)}}
 walk(root);

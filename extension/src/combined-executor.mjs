@@ -22,7 +22,7 @@ export function collectFeedbackInBackground(tab, itemId, browser = chrome, optio
 }
 async function collect(tab, itemId, browser, options) {
   const scheduler = createCaptureScheduler(options);
-  const adapter = source => ({ tabs: browser.tabs,
+  const adapter = source => ({ tabs: browser.tabs, windows: browser.windows,
     scheduleRequest: operation => scheduler.run(source, operation), scripting: {
     executeScript: async spec => {
       const operation = async () => {
@@ -30,7 +30,10 @@ async function collect(tab, itemId, browser, options) {
         const entries = await browser.scripting.executeScript(spec);
         const entry = entries.find(x => x.frameId === 0 && (!spec.target.documentIds
           || spec.target.documentIds.includes(x.documentId)));
-        if (STOP_CODES.has(entry?.result?.code)) scheduler.halt(source, entry.result.code);
+        const inlineVerification = source === 'qa' && options.qa?.allowInteractiveVerification === true
+          && entry?.result?.code === 'verification_required' && entry.result.canOpenVerification === true
+          && spec.args?.[3] !== true;
+        if (STOP_CODES.has(entry?.result?.code) && !inlineVerification) scheduler.halt(source, entry.result.code);
         return entries;
       };
       return operation();

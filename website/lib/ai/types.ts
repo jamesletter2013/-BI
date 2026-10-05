@@ -6,6 +6,7 @@ export type AIProviderInfo = {
   models: AIModel[];
 };
 export type AIStatus = {
+  companyAllowed?: boolean;
   enabled: boolean;
   authenticated: boolean;
   ready: boolean;

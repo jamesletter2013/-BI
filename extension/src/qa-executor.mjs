@@ -14,6 +14,9 @@ const messages = {
   login_context_missing: '商品页未提供有效登录上下文，请确认已登录后重新采集。',
   login_required: '登录已失效，请自行登录后重新采集；未弹出登录窗口。',
   verification_required: '接口要求验证或拒绝访问，本次已停止，未自动打开验证界面。',
+  verification_cancelled: '你已取消平台验证，问大家进度已保留。',
+  verification_timeout: '等待平台验证超过2分钟，已停止并保留进度。',
+  access_denied: '接口拒绝访问，问大家进度已保留；不自动重试。',
   rate_limited: '接口限流，本次已停止，请稍后重试。',
   account_changed: '采集期间登录账号发生变化，已停止本次问答采集。',
   request_timeout: '问答请求超时，已保留此前实读数据。',
@@ -106,8 +109,34 @@ async function collect(tab, itemId, browser, options) {
           target: { tabId: bound.tabId, documentIds: [bound.documentId] },
           world: 'MAIN', func: qaPageRequest, args: [itemId, request, contextId] }));
       } catch (error) { fail(['request_timeout', 'capture_stopped'].includes(error?.code) ? error.code : 'document_changed'); }
-      const entry = entries.find(x => x.documentId === bound.documentId && x.frameId === 0);
+      let entry = entries.find(x => x.documentId === bound.documentId && x.frameId === 0);
       if (!entry) fail('document_changed');
+      if (entry.result?.code === 'verification_required' && entry.result.canOpenVerification === true
+        && options.allowInteractiveVerification === true && !options.shouldStop?.()) {
+        // One handoff to the existing page's native dialog, not a retry loop.
+        // SDK success is parsed and checkpointed normally before any next page.
+        let watch, pulses = 0;
+        try {
+          await options.onVerification?.(true);
+          if (options.shouldStop?.()) fail('manual_paused');
+          await browser.tabs.update(bound.tabId, { active: true });
+          if (browser.windows?.update && Number.isInteger(live.windowId)) await browser.windows.update(live.windowId, { focused: true });
+          if (options.shouldStop?.()) fail('manual_paused');
+          const stopped = new Promise((_, reject) => {
+            watch = setInterval(() => {
+              if (options.shouldStop?.()) reject(Object.assign(new Error('manual_paused'), { code: 'manual_paused' }));
+              // Bound the worker's active lifetime to this single human handoff.
+              if (++pulses % 10 === 0) browser.tabs.get(bound.tabId).catch(() => reject(Object.assign(new Error('document_changed'), { code: 'document_changed' })));
+            }, 1000);
+          });
+          entries = await Promise.race([bounded(browser.scripting.executeScript({
+            target: { tabId: bound.tabId, documentIds: [bound.documentId] }, world: 'MAIN',
+            func: qaPageRequest, args: [itemId, request, contextId, true] }), 130000), stopped]);
+          entry = entries.find(x => x.documentId === bound.documentId && x.frameId === 0);
+          if (!entry) fail('document_changed');
+        } catch (error) { fail(safeCode(error?.code)); }
+        finally { clearInterval(watch); await options.onVerification?.(false); }
+      }
       if (!entry.result?.ok) fail(safeCode(entry.result?.code));
       // Never retry failures in a different tab/account and never use DOM fallback.
       return entry.result.source;
@@ -122,7 +151,7 @@ async function collect(tab, itemId, browser, options) {
   const saved = flow?.result || (validQaCheckpoint(options.checkpoint, itemId) ? qaResultFromCheckpoint(options.checkpoint) : null);
   const qa = saved?.capture || unavailable();
   qa.capturedAt = new Date().toISOString();
-  if (['login_required', 'verification_required', 'rate_limited', 'sdk_requires_ui'].includes(lastCode)) qa.status = 'blocked';
+  if (['login_required', 'verification_required', 'verification_cancelled', 'verification_timeout', 'access_denied', 'rate_limited', 'sdk_requires_ui'].includes(lastCode)) qa.status = 'blocked';
   const suffix = lastCode === 'done' ? (qa.status === 'empty' ? '接口已确认暂无问答。' : '问题及主回答已核对；跟帖未做完整采集。')
     : messages[lastCode] || `采集未全部完成（${lastCode}），只保留已读取内容。`;
   qa.message = `${qa.message || ''}${suffix}`;

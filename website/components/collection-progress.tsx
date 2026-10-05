@@ -13,7 +13,7 @@ export function CollectionProgress({progress, onControl}: {progress: ProgressDat
     <p role="status" className={`text-sm font-medium leading-5 ${progress.state==='paused'?'text-[#a04418]':'text-primary'}`}>{progress.detail}</p>
     <div className="mt-2 grid grid-cols-2 gap-2">{progress.metrics.map(metric=><div key={metric.label}><p className="text-xs text-muted-foreground">{metric.label}</p><p className="mt-0.5 text-lg font-semibold tabular-nums">{metric.value}</p></div>)}</div>
     <div className="mt-2 space-y-2">{progress.bars.map(bar=>{
-      const percent=bar.total===null?null:Math.min(100,Math.floor(bar.read/bar.total*100));
+      const percent=bar.total===null?null:bar.total===0?100:Math.min(100,Math.floor(bar.read/bar.total*100));
       return <div key={bar.label}><div className="mb-1 flex justify-between gap-2 text-xs text-muted-foreground"><span>{bar.label}</span><span className="tabular-nums">{bar.total===null?`${bar.read} / 总量待确认`:`${bar.read} / ${bar.total} · ${percent}%`}</span></div>
         <Progress aria-label={`${bar.label}进度`} value={percent} className={percent===null?'[&_[data-slot=progress-indicator]]:w-0':'[&_[data-slot=progress-track]]:h-1.5'}/>
       </div>;

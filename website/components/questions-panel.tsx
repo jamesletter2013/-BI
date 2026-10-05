@@ -7,6 +7,7 @@ import { ModuleCard } from '@/components/module-card';
 import type { ReviewsCapture } from '@/lib/reviews';
 import { collectionProgress } from '@/lib/collection-progress';
 import { CollectionProgress } from '@/components/collection-progress';
+import { downloadFeedbackExcel, questionsExcel } from '@/lib/feedback-excel';
 
 function QuestionRow({ item, index, full = false }: { item: Question; index: number; full?: boolean }) {
   const answers = full ? item.answers : item.answers.slice(0, 1);
@@ -18,17 +19,25 @@ function QuestionRow({ item, index, full = false }: { item: Question; index: num
   </article>;
 }
 
-export function QuestionsPanel({ qa, checking, reviewData=null, onControl }: { qa: QuestionsCapture | null; checking: boolean; reviewData?:ReviewsCapture|null; onControl?:(action:'pause'|'resume')=>void }) {
+export function QuestionsPanel({ qa, checking, itemId='', reviewData=null, onControl }: { qa: QuestionsCapture | null; checking: boolean; itemId?:string; reviewData?:ReviewsCapture|null; onControl?:(action:'pause'|'resume')=>void }) {
   const [visible, setVisible] = useState(50);
+  const [exporting,setExporting]=useState(false);
+  const [exportNotice,setExportNotice]=useState('');
   useEffect(() => setVisible(50), [checking]);
   const summary = questionsSummary(qa, checking&&!qa);
   // The parent gates stale captures; fresh checkpoints remain visible while collecting.
   const items = qa?.items || [];
   const progress = collectionProgress('qa',reviewData,qa,checking);
+  async function downloadQuestions(){if(!qa||exporting)return;setExporting(true);setExportNotice('正在生成 Excel…');try{
+    const snapshot=questionsExcel(qa,itemId||reviewData?.itemId||'');await downloadFeedbackExcel(snapshot);
+    setExportNotice(`已发起 ${snapshot.count} 个问题及已存回答的 Excel 下载；请查看浏览器下载记录。`);
+  }catch(error){setExportNotice(error instanceof Error?error.message:'问答导出失败，原数据未改动。')}finally{setExporting(false)}}
   return <ModuleCard label="问大家关注问题" eyebrow="Buyer questions" actions={
     <span className="shrink-0 rounded bg-secondary px-2 py-1 text-xs text-primary">进度 · {progress.badge}</span>
   } pinned={<CollectionProgress progress={progress} onControl={onControl}/>}>
     <p className="text-sm text-muted-foreground">商品页真实问题与已读取回答</p>
+    {!!items.length&&<button type="button" onClick={downloadQuestions} disabled={exporting} className="mt-2 rounded-md border border-input bg-secondary px-3 py-2 text-sm font-medium text-primary disabled:opacity-50">{exporting?'正在生成…':'下载问大家 Excel'}</button>}
+    {exportNotice&&<p role="status" className="mt-1 text-sm text-primary">{exportNotice}</p>}
     {!items.length&&<p role="status" className="mt-3 rounded-lg bg-muted p-3 text-sm text-muted-foreground">{checking?'正在读取商品页问答…':'采集后在这里查看已读取的问题和回答。'}</p>}
     {!!items.length && <>
       <Dialog>

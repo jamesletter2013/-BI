@@ -18,14 +18,14 @@ var TAOAQA = (() => {
   };
   var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-  // Taoa-Competitor-Collector-1.0.12/src/qa-executor.mjs
+  // Taoa-Competitor-Collector-1.3.4/src/qa-executor.mjs
   var qa_executor_exports = {};
   __export(qa_executor_exports, {
     collectQuestionsInBackground: () => collectQuestionsInBackground
   });
 
-  // Taoa-Competitor-Collector-1.0.12/src/qa-page-request.mjs
-  async function qaPageRequest(itemId, descriptor = null, contextId = "") {
+  // Taoa-Competitor-Collector-1.3.4/src/qa-page-request.mjs
+  async function qaPageRequest(itemId, descriptor = null, contextId = "", allowVerification = false) {
     const bad = (code) => ({ ok: false, code });
     const validId2 = (v) => typeof v === "string" && /^[1-9]\d{0,31}$/.test(v) || Number.isSafeInteger(v) && v > 0;
     const samePage = () => {
@@ -44,10 +44,21 @@ var TAOAQA = (() => {
       return (!c.mainDomain || ["taobao.com", "tmall.com"].includes(c.mainDomain)) && (!c.subDomain || c.subDomain === "m") && (!c.prefix || c.prefix === "h5api");
     };
     const failure = (value) => {
-      const codes = Array.isArray(value?.ret) ? value.ret.filter((x) => typeof x === "string").join(",") : "";
+      const codes = Array.isArray(value?.ret) ? value.ret.filter((x) => typeof x === "string").map((x) => x.split("::")[0]).join(",") : "";
+      if (/USER_INPUT_CANCEL/.test(codes)) return bad("verification_cancelled");
+      if (/USER_INPUT_FAILURE/.test(codes)) return bad("verification_required");
       if (/SESSION_EXPIRED|SID_INVALID|AUTH_REJECT|NEED_LOGIN|NOT_LOGIN|TOKEN_EMPTY|TOKEN_EXPIRED/.test(codes)) return bad("login_required");
-      if (/VALIDATE|RGV587|ASSIST_FLAG|ANTI|ILLEGAL_ACCESS|ACCESS_DENIED|USER_VALIDATE/.test(codes)) return bad("verification_required");
+      if (/VALIDATE|RGV587|ASSIST_FLAG|USER_VALIDATE/.test(codes)) {
+        let canOpenVerification = false;
+        try {
+          const url = new URL(value?.data?.url);
+          canOpenVerification = /RGV587|ASSIST_FLAG/.test(codes) && url.protocol === "https:" && !url.username && !url.password && ["taobao.com", "tmall.com"].some((d) => url.hostname === d || url.hostname.endsWith("." + d)) && typeof window.lib?.mtop?.antiCreepRequest === "function";
+        } catch {
+        }
+        return { ...bad("verification_required"), canOpenVerification };
+      }
       if (/LIMIT|FREQUENT|TRAFFIC/.test(codes)) return bad("rate_limited");
+      if (/ANTI|ILLEGAL_ACCESS|ACCESS_DENIED/.test(codes)) return bad("access_denied");
       return bad("upstream_unsuccessful");
     };
     try {
@@ -165,7 +176,7 @@ var TAOAQA = (() => {
           }
         };
         const reject = (raw) => finish(failure(raw));
-        timer = setTimeout(() => finish(bad("request_timeout")), 12e3);
+        timer = setTimeout(() => finish(bad(allowVerification ? "verification_timeout" : "request_timeout")), allowVerification ? 12e4 : 12e3);
         try {
           const returned = sdk.request({
             api: descriptor.api,
@@ -180,7 +191,9 @@ var TAOAQA = (() => {
             WindVaneRequest: false,
             LoginRequest: false,
             needLogin: false,
-            AntiCreep: false,
+            // The platform's own inline verification dialog handles user input.
+            // Never click, solve, forge a completion event, or enable redirects.
+            AntiCreep: allowVerification === true,
             AntiFlood: false,
             AntiFlool: false
           }, success, reject);
@@ -194,7 +207,7 @@ var TAOAQA = (() => {
     }
   }
 
-  // Taoa-Competitor-Collector-1.0.12/src/qa-post-detail-reader.mjs
+  // Taoa-Competitor-Collector-1.3.4/src/qa-post-detail-reader.mjs
   var API = "mtop.taobao.social.ugc.post.detail";
   var MAX_INPUT = 2e6;
   var MAX_ANSWERS = 30;
@@ -320,7 +333,7 @@ var TAOAQA = (() => {
     };
   }
 
-  // Taoa-Competitor-Collector-1.0.12/src/qa-list-response-reader.mjs
+  // Taoa-Competitor-Collector-1.3.4/src/qa-list-response-reader.mjs
   var API2 = "mtop.taobao.wdj.list.merge.search";
   var MAX_QUESTIONS = 5e3;
   var MAX_PAGE_QUESTIONS = 200;
@@ -553,7 +566,7 @@ var TAOAQA = (() => {
     };
   }
 
-  // Taoa-Competitor-Collector-1.0.12/src/qa-request-flow.mjs
+  // Taoa-Competitor-Collector-1.3.4/src/qa-request-flow.mjs
   var validId = (v) => typeof v === "string" && /^\d{1,32}$/.test(v);
   var pageNumber = (v) => Number.isSafeInteger(v) && v >= 1 && v <= 1e3;
   var fail3 = (code) => {
@@ -641,6 +654,9 @@ var TAOAQA = (() => {
     "login_context_missing",
     "login_required",
     "verification_required",
+    "verification_cancelled",
+    "verification_timeout",
+    "access_denied",
     "rate_limited",
     "account_changed",
     "request_timeout",
@@ -762,7 +778,7 @@ var TAOAQA = (() => {
     }
   }
 
-  // Taoa-Competitor-Collector-1.0.12/src/qa-executor.mjs
+  // Taoa-Competitor-Collector-1.3.4/src/qa-executor.mjs
   var messages = {
     batch_limit: "\u672C\u6279\u95EE\u5927\u5BB6\u5DF2\u4FDD\u5B58\uFF0C\u5C06\u81EA\u52A8\u7EE7\u7EED\u4E0B\u4E00\u6279\uFF1B\u95EE\u5927\u5BB6\u7ED3\u675F\u540E\u518D\u8BFB\u53D6\u8BC4\u4EF7\u3002",
     manual_paused: "\u5DF2\u6682\u505C\u91C7\u96C6\uFF0C\u5DF2\u4FDD\u5B58\u95EE\u5927\u5BB6\u8FDB\u5EA6\u3002",
@@ -776,6 +792,9 @@ var TAOAQA = (() => {
     login_context_missing: "\u5546\u54C1\u9875\u672A\u63D0\u4F9B\u6709\u6548\u767B\u5F55\u4E0A\u4E0B\u6587\uFF0C\u8BF7\u786E\u8BA4\u5DF2\u767B\u5F55\u540E\u91CD\u65B0\u91C7\u96C6\u3002",
     login_required: "\u767B\u5F55\u5DF2\u5931\u6548\uFF0C\u8BF7\u81EA\u884C\u767B\u5F55\u540E\u91CD\u65B0\u91C7\u96C6\uFF1B\u672A\u5F39\u51FA\u767B\u5F55\u7A97\u53E3\u3002",
     verification_required: "\u63A5\u53E3\u8981\u6C42\u9A8C\u8BC1\u6216\u62D2\u7EDD\u8BBF\u95EE\uFF0C\u672C\u6B21\u5DF2\u505C\u6B62\uFF0C\u672A\u81EA\u52A8\u6253\u5F00\u9A8C\u8BC1\u754C\u9762\u3002",
+    verification_cancelled: "\u4F60\u5DF2\u53D6\u6D88\u5E73\u53F0\u9A8C\u8BC1\uFF0C\u95EE\u5927\u5BB6\u8FDB\u5EA6\u5DF2\u4FDD\u7559\u3002",
+    verification_timeout: "\u7B49\u5F85\u5E73\u53F0\u9A8C\u8BC1\u8D85\u8FC72\u5206\u949F\uFF0C\u5DF2\u505C\u6B62\u5E76\u4FDD\u7559\u8FDB\u5EA6\u3002",
+    access_denied: "\u63A5\u53E3\u62D2\u7EDD\u8BBF\u95EE\uFF0C\u95EE\u5927\u5BB6\u8FDB\u5EA6\u5DF2\u4FDD\u7559\uFF1B\u4E0D\u81EA\u52A8\u91CD\u8BD5\u3002",
     rate_limited: "\u63A5\u53E3\u9650\u6D41\uFF0C\u672C\u6B21\u5DF2\u505C\u6B62\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5\u3002",
     account_changed: "\u91C7\u96C6\u671F\u95F4\u767B\u5F55\u8D26\u53F7\u53D1\u751F\u53D8\u5316\uFF0C\u5DF2\u505C\u6B62\u672C\u6B21\u95EE\u7B54\u91C7\u96C6\u3002",
     request_timeout: "\u95EE\u7B54\u8BF7\u6C42\u8D85\u65F6\uFF0C\u5DF2\u4FDD\u7559\u6B64\u524D\u5B9E\u8BFB\u6570\u636E\u3002",
@@ -885,8 +904,37 @@ var TAOAQA = (() => {
         } catch (error) {
           fail4(["request_timeout", "capture_stopped"].includes(error?.code) ? error.code : "document_changed");
         }
-        const entry = entries.find((x) => x.documentId === bound.documentId && x.frameId === 0);
+        let entry = entries.find((x) => x.documentId === bound.documentId && x.frameId === 0);
         if (!entry) fail4("document_changed");
+        if (entry.result?.code === "verification_required" && entry.result.canOpenVerification === true && options.allowInteractiveVerification === true && !options.shouldStop?.()) {
+          let watch, pulses = 0;
+          try {
+            await options.onVerification?.(true);
+            if (options.shouldStop?.()) fail4("manual_paused");
+            await browser.tabs.update(bound.tabId, { active: true });
+            if (browser.windows?.update && Number.isInteger(live.windowId)) await browser.windows.update(live.windowId, { focused: true });
+            if (options.shouldStop?.()) fail4("manual_paused");
+            const stopped = new Promise((_, reject) => {
+              watch = setInterval(() => {
+                if (options.shouldStop?.()) reject(Object.assign(new Error("manual_paused"), { code: "manual_paused" }));
+                if (++pulses % 10 === 0) browser.tabs.get(bound.tabId).catch(() => reject(Object.assign(new Error("document_changed"), { code: "document_changed" })));
+              }, 1e3);
+            });
+            entries = await Promise.race([bounded(browser.scripting.executeScript({
+              target: { tabId: bound.tabId, documentIds: [bound.documentId] },
+              world: "MAIN",
+              func: qaPageRequest,
+              args: [itemId, request, contextId, true]
+            }), 13e4), stopped]);
+            entry = entries.find((x) => x.documentId === bound.documentId && x.frameId === 0);
+            if (!entry) fail4("document_changed");
+          } catch (error) {
+            fail4(safeCode(error?.code));
+          } finally {
+            clearInterval(watch);
+            await options.onVerification?.(false);
+          }
+        }
         if (!entry.result?.ok) fail4(safeCode(entry.result?.code));
         return entry.result.source;
       };
@@ -900,7 +948,7 @@ var TAOAQA = (() => {
     const saved = flow?.result || (validQaCheckpoint(options.checkpoint, itemId) ? qaResultFromCheckpoint(options.checkpoint) : null);
     const qa = saved?.capture || unavailable();
     qa.capturedAt = (/* @__PURE__ */ new Date()).toISOString();
-    if (["login_required", "verification_required", "rate_limited", "sdk_requires_ui"].includes(lastCode)) qa.status = "blocked";
+    if (["login_required", "verification_required", "verification_cancelled", "verification_timeout", "access_denied", "rate_limited", "sdk_requires_ui"].includes(lastCode)) qa.status = "blocked";
     const suffix = lastCode === "done" ? qa.status === "empty" ? "\u63A5\u53E3\u5DF2\u786E\u8BA4\u6682\u65E0\u95EE\u7B54\u3002" : "\u95EE\u9898\u53CA\u4E3B\u56DE\u7B54\u5DF2\u6838\u5BF9\uFF1B\u8DDF\u5E16\u672A\u505A\u5B8C\u6574\u91C7\u96C6\u3002" : messages[lastCode] || `\u91C7\u96C6\u672A\u5168\u90E8\u5B8C\u6210\uFF08${lastCode}\uFF09\uFF0C\u53EA\u4FDD\u7559\u5DF2\u8BFB\u53D6\u5185\u5BB9\u3002`;
     qa.message = `${qa.message || ""}${suffix}`;
     qa.diagnostics = {

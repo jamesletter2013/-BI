@@ -9,7 +9,7 @@ export function ImageGallery({ images, kind, onPreview, onDownload }: {
   const imageLabel = kind === 'main' ? '主图' : 'SKU 图';
   return <ModuleCard label={label} eyebrow={kind === 'main' ? 'Product gallery' : 'Product SKU'} className="h-[312px]" actions={
     <div className="flex items-center gap-2"><span className="text-xs text-muted-foreground">{images.length} 张</span>
-      <button type="button" onClick={onDownload} disabled={!images.length} className="inline-flex items-center gap-1 rounded-md border border-input bg-secondary px-2 py-1 text-xs font-medium text-primary hover:bg-accent disabled:opacity-40"><Download className="size-3" />一键打包下载</button></div>
+      <button type="button" title="V1.3.5 起转换为 JPG 后打包" onClick={onDownload} disabled={!images.length} className="inline-flex items-center gap-1 rounded-md border border-input bg-secondary px-2 py-1 text-xs font-medium text-primary hover:bg-accent disabled:opacity-40"><Download className="size-3" />下载</button></div>
   }>
     {images.length ? <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">{images.map((src, i) => <div key={`${src}-${i}`} className="min-w-0 text-center">
       <button type="button" onClick={() => onPreview(src, `${imageLabel} ${i + 1}`)} className="aspect-square w-full cursor-zoom-in overflow-hidden rounded-lg border border-border bg-muted">

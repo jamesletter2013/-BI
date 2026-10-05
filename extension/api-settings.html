@@ -1,0 +1,13 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>个人 API 设置 · 淘啊</title><link rel="stylesheet" href="api-ui.css"></head><body><main>
+<h1>使用你自己的 AI</h1><p class="muted">不限定服务商，按接口格式连接。费用由你填写的 API 账户承担，不会回退使用公司密钥。</p>
+<label for="profiles">已保存的 API</label><div class="actions"><select id="profiles" aria-label="选择要编辑的 API"></select><button id="add" type="button">＋ 新增 API</button></div>
+<form id="settings"><label for="name">配置名称</label><input id="name" required maxlength="60" placeholder="例如：DeepSeek 日常 / Claude 文案 / 备用账户" autocomplete="off">
+<label for="protocol">接口格式</label><select id="protocol"><option value="chat">通用 Chat Completions（OpenAI 兼容）</option><option value="claude">Claude Messages</option><option value="gemini">Gemini generateContent</option></select>
+<label for="baseUrl">接口基础地址 / 完整接口地址</label><input id="baseUrl" type="url" required placeholder="https://api.deepseek.com" autocomplete="off"><p id="hint" class="muted"></p>
+<label for="model">模型 ID</label><input id="model" required placeholder="从你的服务商控制台复制模型 ID" autocomplete="off" maxlength="200">
+<p id="modelHint" class="muted" aria-live="polite"></p>
+<div id="thinkingField" hidden><label for="thinking">DeepSeek 分析模式</label><select id="thinking"><option value="disabled">普通分析（默认，快速生成建议）</option><option value="enabled">深度思考（可能更慢、消耗更多 tokens）</option></select><p class="muted">仅对 DeepSeek 官方 Chat Completions 生效。深度思考可能需要更高输出预算；切换不会自动调高上限。</p></div>
+<label for="key">API Key</label><input id="key" type="password" autocomplete="off" spellcheck="false" maxlength="4096" placeholder="只在此插件内填写；已有密钥可留空保留"><p class="muted">密钥仅保存在本浏览器会话的插件存储，不同步、不上传到工作台服务端。浏览器重启或插件重新加载后需重新填写。其他设置保留在本机。</p>
+<details><summary>更多设置</summary><label for="maxTokens">单次输出上限（tokens）</label><input id="maxTokens" type="number" min="256" max="16000" value="4000" required><p class="muted">4000 是插件默认的单次预算，不是模型容量；本插件可设 256–16000。深度思考内容也可能占用输出预算。当前按文字分析，不识别图片链接；不支持专有签名、Azure 专用鉴权或非上述协议。不要填写不可信中转地址，它会收到密钥和商品资料。</p><p id="consentState" class="muted"></p><button id="revokeConsent" type="button">撤销本套发送授权</button><p class="muted">首次发送时确认一次，记在本机插件内。后续仅在你主动点击发送时调用并计费。修改地址、接口格式、模型、分析模式或输出上限后重新确认；可在这里撤销。</p></details>
+<div class="actions"><button type="submit" class="primary">授权域名并保存</button><button id="clear" type="button">清除本套密钥</button><button id="delete" type="button">删除本套 API</button><button id="test" type="button">测试本套配置（可能计费）</button></div></form><p id="status" role="status" aria-live="polite"></p>
+</main><script src="api-core.js"></script><script type="module" src="api-settings.js"></script></body></html>

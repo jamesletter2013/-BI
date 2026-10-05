@@ -2,8 +2,10 @@ importScripts('qa-runtime.js');
 importScripts('reviews-runtime.js');
 importScripts('feedback-runtime.js');
 importScripts('review-jobs-runtime.js');
+importScripts('api-core.js', 'api-profiles.js', 'api-background.js');
+importScripts('capture-tabs.js');
 const WORKBENCH_URL = 'https://taoa-competitor-lab.jamesletter2013.chatgpt.site/';
-const reviewJobs = TAOAJOBS.createReviewJobs({ publish: publishReviewProgress });
+const reviewJobs = TAOAJOBS.createReviewJobs({ publish: publishReviewProgress, allowInteractiveVerification: true });
 const reviewRecovery = reviewJobs.recover().catch(() => undefined);
 async function publishReviewProgress(reviewData) {
   await chrome.storage.local.set({ taoaLastReviewDiagnostics: {
@@ -519,12 +521,16 @@ function selectBestSkuImages(pageWorldValues, domValues) {
 let creatingOffscreenDocument;
 
 async function ensureOffscreenDocument() {
-  if (await chrome.offscreen.hasDocument()) return;
+  const url = chrome.runtime.getURL('offscreen.html');
+  const exists = chrome.runtime.getContexts
+    ? (await chrome.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'], documentUrls: [url] })).length > 0
+    : (await clients.matchAll()).some(client => client.url === url);
+  if (exists) return;
   if (!creatingOffscreenDocument) {
     creatingOffscreenDocument = chrome.offscreen.createDocument({
       url: 'offscreen.html',
-      reasons: ['BLOBS'],
-      justification: '把用户选择的商品图片打包成一个 ZIP 文件。',
+      reasons: ['BLOBS', 'WORKERS'],
+      justification: '打包商品图片，并使用独立 Worker 执行用户确认的 AI 请求，不打开标签页。',
     }).finally(() => {
       creatingOffscreenDocument = undefined;
     });
@@ -562,7 +568,7 @@ async function downloadImages(rawUrls, group, rawItemId) {
     conflictAction: 'uniquify',
     saveAs: false,
   });
-  return { downloaded: Number(response.downloaded) || 0, failed: Number(response.failed) || 0 };
+  return { downloaded: Number(response.downloaded) || 0, failed: Number(response.failed) || 0, format: response.format };
 }
 
 function assetOwnerKey(value) {
@@ -919,24 +925,32 @@ async function runCapture(tabId) {
   return capture;
 }
 
+const pendingCaptures = new Map();
 async function openAndCapture(rawUrl) {
   const productUrl = compactProductUrl(rawUrl);
   if (!productUrl) throw new Error('请输入有效的淘宝或天猫商品链接。');
-  setBadge('…', '#2563eb');
-  const productTab = await chrome.tabs.create({ url: productUrl, active: false });
-  if (!productTab.id) throw new Error('无法打开商品页面。');
-  await chrome.tabs.update(productTab.id, { autoDiscardable: false }).catch(() => undefined);
-  await waitForComplete(productTab.id).catch(() => undefined);
-  await new Promise((resolve) => setTimeout(resolve, 2200));
-  const capture = await runCapture(productTab.id);
-  // A successful image capture does not mean Q&A finished. Retain only this
-  // newly-created tab when Q&A is incomplete, for inspection / a manual retry.
-  // Never close tabs the user originally opened.
-  if (capture.status === 'success' && ['complete', 'empty'].includes(capture.qa?.status)
-      && ['complete_scope', 'empty_scope'].includes(capture.reviewData?.status)) {
-    await chrome.tabs.remove(productTab.id).catch(() => undefined);
-  }
-  return capture;
+  const identity = TAOACAPTURETABS.identity(productUrl);
+  if (!identity) throw new Error('商品链接缺少有效的商品 ID。');
+  if (pendingCaptures.has(identity.id)) return pendingCaptures.get(identity.id);
+  const task = (async () => {
+    const productTab = await TAOACAPTURETABS.findExisting(chrome, productUrl);
+    setBadge('…', '#2563eb');
+    if (productTab.status !== 'complete') await waitForComplete(productTab.id);
+    const live = await chrome.tabs.get(productTab.id);
+    const current = TAOACAPTURETABS.identity(live.pendingUrl || live.url);
+    if (current?.id !== identity.id || (identity.sku && current.sku !== identity.sku)) {
+      throw new Error('商品页已切换，请保持对应商品页后重试。');
+    }
+    const capture = await runCapture(productTab.id);
+    if (capture.status === 'blocked') {
+      // Bring the existing platform page forward for the user; never solve its challenge.
+      await chrome.tabs.update(productTab.id, { active: true }).catch(() => undefined);
+      if (Number.isInteger(live.windowId)) await chrome.windows.update(live.windowId, { focused: true }).catch(() => undefined);
+    }
+    return capture;
+  })();
+  pendingCaptures.set(identity.id, task);
+  try { return await task; } finally { pendingCaptures.delete(identity.id); }
 }
 
 chrome.action.onClicked.addListener(async (tab) => {

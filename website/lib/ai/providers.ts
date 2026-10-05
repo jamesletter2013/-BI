@@ -2,6 +2,7 @@ import type { AIHistoryMessage, AIModel } from './types';
 import { AIError } from './types';
 
 export type ProviderConfig = {
+  AI_COMPANY_USER_IDS?: string;
   DEEPSEEK_API_KEY?: string;
   AI_ENABLED?: string;
   AI_DAILY_USER_LIMIT?: string;

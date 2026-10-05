@@ -18,14 +18,14 @@ var TAOAREVIEWS = (() => {
   };
   var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-  // Taoa-Competitor-Collector-1.0.12/src/review-executor.mjs
+  // Taoa-Competitor-Collector-1.3.4/src/review-executor.mjs
   var review_executor_exports = {};
   __export(review_executor_exports, {
     collectReviewsInBackground: () => collectReviewsInBackground,
     unavailableReviews: () => unavailableReviews
   });
 
-  // Taoa-Competitor-Collector-1.0.12/src/review-page-request.mjs
+  // Taoa-Competitor-Collector-1.3.4/src/review-page-request.mjs
   async function reviewPageRequest(itemId, descriptor = null, contextId = "") {
     const bad = (code) => ({ ok: false, code });
     const id = (v) => typeof v === "string" && /^[1-9]\d{0,31}$/.test(v) || Number.isSafeInteger(v) && v > 0;
@@ -189,7 +189,7 @@ var TAOAREVIEWS = (() => {
     }
   }
 
-  // Taoa-Competitor-Collector-1.0.12/src/review-plan.mjs
+  // Taoa-Competitor-Collector-1.3.4/src/review-plan.mjs
   var REVIEW_SCOPES = Object.freeze({
     all: { label: "\u666E\u901A\u5217\u8868", code: "-8" },
     append: { label: "\u8FFD\u8BC4\u5217\u8868", code: "2" },
@@ -205,7 +205,7 @@ var TAOAREVIEWS = (() => {
     return scopeKeys.filter((scope) => supplementalScope(scope) && tabs.some((tab) => String(tab?.status) === "1" && tab?.title === REVIEW_SCOPES[scope].title && tab?.extraInfo?.labelType === "tab" && tab.extraInfo.gray !== true && tab.extraInfo.gray !== "true" && tab.extraInfo.rateType === REVIEW_SCOPES[scope].code));
   }
 
-  // Taoa-Competitor-Collector-1.0.12/src/review-profile.mjs
+  // Taoa-Competitor-Collector-1.3.4/src/review-profile.mjs
   var ALL_PROFILE = "pc-all50-v1";
   var FILTER_PROFILE = "pc-filter20-v1";
   var LEGACY_PROFILE = "pc-legacy20-v1";
@@ -213,7 +213,7 @@ var TAOAREVIEWS = (() => {
   var pageSizeFor = (scope) => scope === "all" ? 50 : 20;
   var knownProfile = (value) => [ALL_PROFILE, FILTER_PROFILE, LEGACY_PROFILE].includes(value);
 
-  // Taoa-Competitor-Collector-1.0.12/src/review-model.mjs
+  // Taoa-Competitor-Collector-1.3.4/src/review-model.mjs
   var REVIEW_API = "mtop.taobao.rate.detaillist.get";
   var REVIEW_VERSION = "6.0";
   var REVIEW_LIMITS = Object.freeze({ pagesPerScope: 1e3, records: 1e4, elapsedMs: 2e4, batchPages: 5, bytes: 16e6 });
@@ -374,7 +374,7 @@ var TAOAREVIEWS = (() => {
     };
   }
 
-  // Taoa-Competitor-Collector-1.0.12/src/review-flow.mjs
+  // Taoa-Competitor-Collector-1.3.4/src/review-flow.mjs
   function reviewRequest(itemId, scope, page, advertised = []) {
     if (!validId(itemId) || !scopeKeys.includes(scope) || !Number.isInteger(page) || page < 1 || page > 1e3 || supplementalScope(scope) && !advertised.includes(scope)) throw new Error("invalid_request");
     const code = REVIEW_SCOPES[scope].code;
@@ -683,7 +683,7 @@ var TAOAREVIEWS = (() => {
     return { ...captureFromCheckpoint(s, reason, { requestCount: requests, elapsedMs: now() - started, limits }), checkpoint: s };
   }
 
-  // Taoa-Competitor-Collector-1.0.12/src/review-executor.mjs
+  // Taoa-Competitor-Collector-1.3.4/src/review-executor.mjs
   var inflight = /* @__PURE__ */ new Map();
   var fail = (code) => {
     throw Object.assign(new Error(code), { code });

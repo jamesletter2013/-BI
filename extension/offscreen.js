@@ -1,14 +1,29 @@
 const encoder = new TextEncoder();
 
-function imageExtension(value, contentType = '') {
+async function encodeJpeg(blob) {
+  if (!blob.size || blob.size > 30 * 1024 * 1024) throw new Error('原图为空或超过 30 MB');
+  let bitmap, canvas;
   try {
-    const match = new URL(value).pathname.match(/\.(jpe?g|png|webp|avif)(?:$|[?#])/i);
-    if (match) return match[1].toLowerCase().replace('jpeg', 'jpg');
-  } catch {}
-  if (/png/i.test(contentType)) return 'png';
-  if (/webp/i.test(contentType)) return 'webp';
-  if (/avif/i.test(contentType)) return 'avif';
-  return 'jpg';
+    bitmap = await createImageBitmap(blob);
+    // Do not silently resize or crop long detail images when canvas limits are exceeded.
+    if (!bitmap.width || !bitmap.height || Math.max(bitmap.width, bitmap.height) > 32767
+        || bitmap.width * bitmap.height > 40_000_000) throw new Error('原图尺寸超出转换范围，未缩放或裁切');
+    canvas = document.createElement('canvas');
+    canvas.width = bitmap.width; canvas.height = bitmap.height;
+    const context = canvas.getContext('2d', { alpha: false });
+    if (!context) throw new Error('浏览器无法转换图片');
+    context.fillStyle = '#ffffff';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(bitmap, 0, 0);
+    const jpeg = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.95));
+    if (!jpeg || jpeg.type !== 'image/jpeg') throw new Error('JPG 编码失败');
+    const data = new Uint8Array(await jpeg.arrayBuffer());
+    if (data[0] !== 0xff || data[1] !== 0xd8 || data[2] !== 0xff) throw new Error('JPG 文件校验失败');
+    return data;
+  } finally {
+    bitmap?.close();
+    if (canvas) { canvas.width = 0; canvas.height = 0; }
+  }
 }
 
 const crcTable = (() => {
@@ -106,31 +121,40 @@ async function downloadArchive(rawUrls, group, rawItemId) {
   const folder = group === 'sku' ? 'SKU图' : group === 'detail' ? '详情图' : '主图';
   const itemId = String(rawItemId || '').replace(/\D/g, '').slice(0, 24) || '未命名商品';
   const entries = [];
-  let failed = 0;
+  const failures = [];
+  let archiveBytes = 0;
 
   for (let index = 0; index < urls.length; index += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20000);
     try {
-      const response = await fetch(urls[index], { credentials: 'omit', cache: 'no-store' });
+      const response = await fetch(urls[index], { credentials: 'omit', cache: 'no-store', signal: controller.signal });
       if (!response.ok) throw new Error(String(response.status));
-      const data = new Uint8Array(await response.arrayBuffer());
-      if (!data.length) throw new Error('empty');
-      const extension = imageExtension(urls[index], response.headers.get('content-type') || '');
+      if (Number(response.headers.get('content-length')) > 30 * 1024 * 1024) throw new Error('原图超过 30 MB');
+      const data = await encodeJpeg(await response.blob());
+      if (archiveBytes + data.length > 200 * 1024 * 1024) throw new Error('本次压缩包达到 200 MB 上限');
+      archiveBytes += data.length;
       entries.push({
-        name: `${folder}/${String(index + 1).padStart(2, '0')}.${extension}`,
+        name: `${folder}/${String(index + 1).padStart(2, '0')}.jpg`,
         data,
       });
-    } catch {
-      failed += 1;
+    } catch (error) {
+      failures.push(`第 ${index + 1} 张：${String(error?.message || '读取或转换失败').slice(0, 100)}`);
+    } finally {
+      clearTimeout(timer);
     }
   }
 
-  if (!entries.length) throw new Error('图片读取失败，无法生成压缩包。');
+  if (!entries.length) throw new Error(`图片读取或 JPG 转换失败：${failures[0] || '没有可下载的图片'}`);
+  const downloaded = entries.length;
+  if (failures.length) entries.push({ name: '未成功转换的图片.txt', data: encoder.encode(failures.join('\n')) });
   const archive = buildZip(entries);
   const objectUrl = URL.createObjectURL(archive);
   setTimeout(() => URL.revokeObjectURL(objectUrl), 300000);
   return {
-    downloaded: entries.length,
-    failed,
+    downloaded,
+    failed: failures.length,
+    format: 'jpg',
     objectUrl,
     filename: `淘啊竞品/${itemId}-${folder}.zip`,
   };

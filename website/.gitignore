@@ -39,3 +39,5 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+# Keep locally extracted plugin copies out of source releases; publish the ZIP only.
+/public/downloads/Taoa-Competitor-Collector-*/

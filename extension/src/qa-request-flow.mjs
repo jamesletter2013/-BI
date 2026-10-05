@@ -43,7 +43,7 @@ const safeCodes = new Set(['capture_stopped', 'aborted', 'manual_paused', 'stora
   'question_product_mismatch', 'answer_question_mismatch', 'detail_question_mismatch', 'upstream_unsuccessful',
   'invalid_response_size', 'invalid_json_or_jsonp', 'invalid_response_shape', 'unsupported_api',
   'missing_question_identity', 'invalid_answer_list', 'invalid_question_list', 'sdk_unavailable', 'sdk_requires_ui',
-  'login_context_missing', 'login_required', 'verification_required', 'rate_limited', 'account_changed',
+  'login_context_missing', 'login_required', 'verification_required', 'verification_cancelled', 'verification_timeout', 'access_denied', 'rate_limited', 'account_changed',
   'request_timeout', 'capture_timeout', 'document_changed', 'unsupported_browser']);
 
 export async function runQaResponseFlow({ itemId, exchange, checkpoint, onCheckpoint = async () => {},

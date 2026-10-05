@@ -7,7 +7,14 @@ export type QuestionsCapture = {
   status: 'complete' | 'partial' | 'empty' | 'not_found' | 'blocked' | 'unavailable';
   capturedAt: string;
   message: string;
+  reason?: string;
 };
+
+export const collectionReasons = new Set(['batch_limit','done','partial_answers','list_limit','list_no_progress',
+  'unknown_list_pagination','size_limit','manual_paused','interrupted','verification_required','access_denied',
+  'verification_cancelled','verification_timeout','rate_limited','login_required','login_context_missing',
+  'sdk_requires_ui','sdk_unavailable','request_timeout','capture_timeout','document_changed','account_changed',
+  'product_mismatch','storage_unavailable','transport_failed','upstream_unsuccessful','invalid_checkpoint']);
 
 const clean = (v: unknown, limit = 2000) => typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, limit) : '';
 const nonNegative = (v: unknown) => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : null;
@@ -51,7 +58,9 @@ export function validateQuestions(value: unknown): QuestionsCapture | null {
   }
   if (status === 'empty' && total !== null && total > 0) status = 'unavailable';
   const label = clean(input.totalLabel, 30);
-  return { items, total, totalExact, totalLabel: /^[\d,.]+万?\+?$/.test(label) ? label : total === null ? '' : String(total), status, capturedAt: clean(input.capturedAt, 80), message: clean(input.message, 700) + (limited ? '已达到展示安全限额，不能视为全部内容。' : '') };
+  const diagnostics = input.diagnostics && typeof input.diagnostics === 'object' ? input.diagnostics as Record<string,unknown> : {};
+  const reason = collectionReasons.has(String(input.reason || diagnostics.reason)) ? String(input.reason || diagnostics.reason) : undefined;
+  return { items, total, totalExact, reason, totalLabel: /^[\d,.]+万?\+?$/.test(label) ? label : total === null ? '' : String(total), status, capturedAt: clean(input.capturedAt, 80), message: clean(input.message, 700) + (limited ? '已达到展示安全限额，不能视为全部内容。' : '') };
 }
 
 export function questionsSummary(qa: QuestionsCapture | null, checking = false) {

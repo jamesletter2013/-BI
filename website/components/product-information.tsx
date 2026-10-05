@@ -27,9 +27,9 @@ export function ProductInformation(props: ProductInformationProps) {
       <input id="product-url" value={props.url} onChange={event => props.onUrlChange(event.target.value)} className="h-9 w-full rounded-lg border border-border pl-8 pr-2 text-sm outline-none focus:border-primary" />
     </div>
     <button onClick={props.onCapture} disabled={props.checking} className="mt-2.5 flex h-9 w-full items-center justify-center gap-2 rounded-lg bg-primary text-sm font-semibold text-white hover:bg-[#a73606] disabled:opacity-60">
-      <RefreshCw className={props.checking ? 'size-3.5 animate-spin' : 'size-3.5'} />{props.checking ? '正在后台采集' : '后台采集商品页面'}
+      <RefreshCw className={props.checking ? 'size-3.5 animate-spin' : 'size-3.5'} />{props.checking ? '正在后台采集' : '采集已打开的商品页'}
     </button>
-    <p className="mt-1.5 text-xs leading-5 text-muted-foreground">分批采集完成前请保留商品标签页，结果自动回传。</p>
+    <p className="mt-1.5 text-xs leading-5 text-muted-foreground">V1.3.5 起不再新开商品页。请先打开对应商品并保持登录，采集期间保留标签；正常采集不切前台，需要验证时再显示商品页。</p>
     <button type="button" onClick={props.onLoadSaved} disabled={props.checking || props.loadingSaved} className="mt-2 w-full rounded-lg border border-input bg-white px-3 py-2 text-sm font-medium text-primary hover:bg-secondary disabled:opacity-50">{props.loadingSaved ? '正在读取已存评价…' : '读取已保存评价（不重采）'}</button>
     <div className="mt-4 flex items-start gap-2.5">
       <div className="size-12 shrink-0 overflow-hidden rounded-lg bg-muted">{product.mainImages[0]

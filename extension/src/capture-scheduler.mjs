@@ -1,6 +1,7 @@
 // One shared FIFO for both readers. Each reader has at most one outstanding
 // page, so the other reader can run before a long list resumes pagination.
 export const STOP_CODES = new Set(['login_required', 'verification_required', 'rate_limited',
+  'access_denied', 'verification_cancelled', 'verification_timeout',
   'sdk_requires_ui', 'account_changed', 'document_changed', 'product_mismatch', 'request_timeout']);
 const stopped = () => Object.assign(new Error('capture_stopped'), { code: 'capture_stopped' });
 export function createCaptureScheduler({ now = Date.now, sleep = ms => new Promise(r => setTimeout(r, ms)),

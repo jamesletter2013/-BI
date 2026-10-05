@@ -17,7 +17,10 @@
   };
 
   function onDelivery(message, _sender, sendResponse) {
-    if (message?.type === 'TAOA_BRIDGE_PING') {
+    if (message?.type === 'TAOA_PERSONAL_EVENT') {
+      post(message);
+      sendResponse({ok:true});
+    } else if (message?.type === 'TAOA_BRIDGE_PING') {
       sendResponse({ ok: true });
     } else if (message?.type === 'TAOA_REVIEW_PROGRESS') {
       post({ type: 'TAOA_REVIEW_PROGRESS', payload: message.reviewData });
@@ -32,6 +35,21 @@
   function onPageMessage(event) {
     if (event.source !== window || event.origin !== window.location.origin) return;
     const type = event.data?.type;
+    if (['TAOA_PERSONAL_STATUS','TAOA_PERSONAL_SETTINGS','TAOA_PERSONAL_START','TAOA_PERSONAL_CANCEL','TAOA_PERSONAL_JOB'].includes(type)) {
+      if(!chrome.runtime?.id)return;
+      const id=event.data.id;
+      if(typeof id!=='string'||id.length>80)return;
+      // The website cannot supply an endpoint, key, headers, or settings write.
+      const request={type};
+      if(type==='TAOA_PERSONAL_START'){
+        request.input=event.data.input;request.revision=event.data.revision;request.profileId=event.data.profileId;
+        request.confirmed=event.data.confirmed===true;
+      }
+      if(type==='TAOA_PERSONAL_CANCEL'||type==='TAOA_PERSONAL_JOB')request.requestId=event.data.requestId;
+      chrome.runtime.sendMessage(request).then(response=>post({type:'TAOA_PERSONAL_REPLY',id,response}))
+        .catch(()=>post({type:'TAOA_PERSONAL_REPLY',id,response:{ok:false,error:'插件连接已失效，请刷新工作台。'}}));
+      return;
+    }
     if (!['TAOA_REQUEST_CAPTURE', 'TAOA_START_CAPTURE', 'TAOA_DOWNLOAD_IMAGES', 'TAOA_REVIEW_CONTROL', 'TAOA_REVIEW_STATUS'].includes(type)) return;
     // A detached old listener must allow the current bridge to receive requests.
     if (!chrome.runtime?.id) return;
@@ -84,6 +102,7 @@
           type: 'TAOA_DOWNLOAD_RESULT',
           downloaded: Number(response.downloaded) || 0,
           failed: Number(response.failed) || 0,
+          format: response.format === 'jpg' ? 'jpg' : '',
         });
       }).catch((error) => reportError('TAOA_DOWNLOAD_ERROR', error));
     }

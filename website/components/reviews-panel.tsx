@@ -4,7 +4,7 @@ import type { Review, ReviewsCapture } from '@/lib/reviews';
 import { reviewDiagnostic, reviewScopeLabels, reviewCounts, reviewHasContent } from '@/lib/reviews';
 import { collectionProgress } from '@/lib/collection-progress';
 import { CollectionProgress } from '@/components/collection-progress';
-import { reviewDetails } from '@/lib/review-export';
+import { downloadFeedbackExcel, reviewExcel } from '@/lib/feedback-excel';
 import { reviewRating, ratingLabels, ratingCounts, type ReviewRating } from '@/lib/review-rating';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
@@ -31,6 +31,7 @@ export function ReviewsPanel({data,checking,onControl,platformLabel='',supplemen
   const [rating,setRating]=useState('all');
   const [showReviews,setShowReviews]=useState(false);
   const [exportNotice,setExportNotice]=useState('');
+  const [exporting,setExporting]=useState(false);
   useEffect(()=>setVisible(20),[data?.job?.id,data?.itemId]);
   useEffect(()=>{setQuery('');setFilter('all');setRating('all');setShowReviews(false)},[data?.itemId]);
   useEffect(()=>setVisible(20),[query,filter,rating]);
@@ -44,13 +45,10 @@ export function ReviewsPanel({data,checking,onControl,platformLabel='',supplemen
   const declared=platformLabel||data?.scopes[0]?.platformTotal||'未知';
   function downloadDiagnostic(){if(!data)return;const blob=new Blob([JSON.stringify(reviewDiagnostic(data,declared),null,2)],{type:'application/json'});
     const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`评价采集诊断-${data.itemId}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
-  function downloadDetails(){if(!data)return;try{
-    const snapshot=reviewDetails(data),blob=new Blob([JSON.stringify(snapshot,null,2)],{type:'application/json'});
-    const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;
-    a.download=`评价明细-${data.itemId}-${snapshot.exportedAt.replace(/[:.]/g,'-')}.json`;
-    document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
-    setExportNotice(`已发起 ${snapshot.items.length} 条明细下载；是否保存成功请查看浏览器下载记录。`);
-  }catch(error){setExportNotice(error instanceof Error?error.message:'明细导出失败，原数据未改动。')}}
+  async function downloadDetails(){if(!data||exporting)return;setExporting(true);setExportNotice('正在生成 Excel…');try{
+    const snapshot=reviewExcel(data);await downloadFeedbackExcel(snapshot);
+    setExportNotice(`已发起 ${snapshot.count} 条评价 Excel 下载；请查看浏览器下载记录。`);
+  }catch(error){setExportNotice(error instanceof Error?error.message:'明细导出失败，原数据未改动。')}finally{setExporting(false)}}
   return <section className="workbench-card flex h-[640px] min-h-0 flex-col overflow-hidden p-4" aria-label="自动采集评价">
     <header className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border pb-3"><h2 className="text-base font-bold">商品评价</h2><span className="rounded bg-secondary px-2 py-1 text-xs text-primary">进度 · {progress.badge}</span></header>
     <CollectionProgress progress={progress} onControl={onControl}/>
@@ -61,14 +59,14 @@ export function ReviewsPanel({data,checking,onControl,platformLabel='',supplemen
         <select id="review-rating-filter" value={rating} onChange={e=>{setRating(e.target.value);setShowReviews(true)}} className="mt-1 w-full rounded-md border border-border bg-white px-3 py-2">
           <option value="all">全部（{items.length}）</option>{(Object.keys(ratingLabels) as ReviewRating[]).map(key=><option key={key} value={key}>{ratingLabels[key]}（{ratings[key]}）</option>)}
         </select></div>
-      <details className="mt-3 rounded-lg border border-border p-3"><summary className="cursor-pointer text-sm text-muted-foreground">采集详情与导出</summary><p className="mt-2 text-xs text-muted-foreground">按平台标签区分；未返回标签的保留为“未标明”。筛选结果在下方评价明细中查看。</p>
+      <button type="button" onClick={downloadDetails} disabled={!items.length||exporting} className="mt-3 rounded-md border border-input bg-secondary px-3 py-2 text-sm font-medium text-primary disabled:opacity-50">{exporting?'正在生成…':'下载评价 Excel'}</button>
+      {exportNotice&&<p role="status" className="mt-1 text-sm text-primary">{exportNotice}</p>}
+      <details className="mt-3 rounded-lg border border-border p-3"><summary className="cursor-pointer text-sm text-muted-foreground">采集详情与导出说明</summary><p className="mt-2 text-xs text-muted-foreground">按平台标签区分；未返回标签的保留为“未标明”。筛选结果在下方评价明细中查看。</p>
       <p className="mt-1 text-xs leading-5 text-muted-foreground">非模板原评 {counts.content} 条 · 默认/未填写 {counts.default} 条 · 统一文案 {counts.template} 条 · 空原评 {counts.empty} 条 · 有正文追评 {counts.append} 条（追评不重复计数，短文/标点也保留）</p>
       <p className="text-xs leading-5 text-muted-foreground">含非模板正文的独立记录：{counts.contentRecords} 条（原评或追评有正文；不代表体验已核实）</p>
       <div className="mt-3 rounded-lg border border-border p-3 text-sm leading-6">
-        <button type="button" onClick={downloadDetails} disabled={!items.length} className="rounded-md bg-primary px-3 py-2 font-medium text-white hover:bg-[#a73606] disabled:opacity-50">导出评价明细（JSON）</button>
         <p className="mt-1 text-muted-foreground">导出当前全部 {items.length} 条已存记录，含原评、追评、日期、规格和来源；不受搜索筛选影响，不含买家资料或登录凭据，不重新采集。</p>
         {data.job?.state==='running'&&<p className="text-amber-700">仍在采集中：导出的是当前快照，不是最终结果。</p>}
-        {exportNotice&&<p role="status" className="mt-1 text-primary">{exportNotice}</p>}
       </div>
       {data.coverage&&<div className="mt-2 rounded-lg border border-border bg-secondary p-3 text-sm leading-6"><p className="font-medium text-primary">{is50?`50条分页 · 本轮新增记录 ${data.coverage.addedSinceStart??'待核对'} 条`:`近期补采：额外找回 ${data.coverage.supplementalAdded} 条独立评价`}</p>{is50&&<p className="text-xs text-muted-foreground">保留旧记录 {data.coverage.retainedCount??'待核对'} 条。新增记录可能是默认/统一文案，不等于缺失正文已补齐。</p>}<p className="text-xs text-muted-foreground">{data.coverage.discoveryDone?data.coverage.availableScopes.length?`接口提供入口：${data.coverage.availableScopes.map(s=>reviewScopeLabels[s]).join('、')}`:'当前响应未提供可用的额外筛选入口':'正在检查筛选入口'}。每个入口独立分页后按评价 ID 合并；是否补齐仍待核对。{is50?'不额外请求历史入口，普通接口实际范围以返回标注为准。':'不含历史评价。'}</p></div>}
       <div className="mt-2 space-y-2 rounded-lg bg-muted p-3 text-sm leading-6 text-muted-foreground">{[...new Set(['all','append',...data.scopes.map(s=>s.scope)])].map(scope=>{const s=data.scopes.find(row=>row.scope===scope);return <p key={scope}>{reviewScopeLabels[scope]}：{s?<>{s.readCount} 条 · {s.pages} 页{s.timePeriod?` · ${s.timePeriod}`:''}{s.uniqueAdded!==null?` · 去重新增 ${s.uniqueAdded} 条`:''}<br/><span className="text-xs">接口标注 {s.total??'未知'} 条 · {s.complete?'本入口数量核对通过':s.reason==='filter_not_available'?'当前商品未提供此入口，未请求':s.ended?`本入口已停止（${({count_mismatch:'数量不一致',repeated_page:'重复页',empty_page:'空继续页',pagination_unknown:'分页状态未知'} as Record<string,string>)[s.reason]||'尚未核对完整'}）`:'尚未读完'}{s.totalChanged?`；总数发生变化：首个 ${s.initialTotal}，最近 ${s.total}`:''}</span></>:'尚未读取'}</p>})}
