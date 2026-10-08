@@ -1,5 +1,5 @@
 import type { OpportunityInput } from './opportunity';
-import { productParameters } from './product-parameters';
+import { productParameters, normalizeShopMetrics, type ProductParameter } from './product-parameters';
 import { ratingLabels, reviewRating } from './review-rating';
 import { collectionProgress } from './collection-progress';
 import { analysisSystemPrompt } from './analysis-prompt';
@@ -8,6 +8,8 @@ export type AnalysisInput = OpportunityInput & {
   sourceUrl?:string; shop?:string; sales?:string; reviewCount?:string; shopRating?:string;
   positiveRate?:string; serviceScore?:string; mainImages?:string[]; skuImages?:string[];
   detailImages?:string[]; skuOptions?:string[]; collecting?:boolean;
+  shopMetrics?:ProductParameter[];
+  categoryPath?:string; categorySource?:string; listedAt?:string; listedAtSource?:string;
 };
 export type ReviewPushScope = 'bad' | 'neutral_bad' | 'all';
 export const pushScopeLabels:Record<ReviewPushScope,string> = {bad:'仅差评（默认）',neutral_bad:'中评与差评',all:'全部已采评价'};
@@ -23,8 +25,8 @@ export function buildAnalysisPacket(input:AnalysisInput, scope:ReviewPushScope='
   const rows=selectedReviews(input,scope),qa=input.qa;
   const packet={
     snapshot:{itemId:input.itemId,pushedAt:now,pageCapturedAt:input.capturedAt,collecting:Boolean(input.collecting||input.reviewData?.job?.state==='running'),note:'仅当前已采集快照；未读取内容不补写，平台标注不是全量实读。'},
-    product:{title:input.title,sourceUrl:productLink(input.sourceUrl),shop:input.shop||'',price:input.price,sales:input.sales||'',reviewCount:input.reviewCount||'',shopRating:input.shopRating||'',positiveRate:input.positiveRate||'',serviceScore:input.serviceScore||''},
-    parameters:productParameters(input.attributes,input.pageText),
+    product:{title:input.title,sourceUrl:productLink(input.sourceUrl),shop:input.shop||'',price:input.price,sales:input.sales||'',reviewCount:input.reviewCount||'',shopRating:input.shopRating||'',positiveRate:input.positiveRate||'',shopMetrics:normalizeShopMetrics(input.shopMetrics),categoryPath:input.categoryPath||'',categorySource:input.categorySource||'',listedAt:input.listedAt||'',listedAtSource:input.listedAtSource||''},
+    parameters:productParameters(input.attributes,input.pageText,input.parameters),
     images:{main:imageLinks(input.mainImages),sku:imageLinks(input.skuImages),detail:imageLinks(input.detailImages)},
     skuOptions:input.skuOptions||[],detailNotice:'详情页以已采集图片链接提供；未识别的图片文字不补写。',
     reviews:{selection:pushScopeLabels[scope],available:(input.reviewData?.items||[]).length,included:rows.length,status:collectionProgress('reviews',input.reviewData,qa).badge,message:input.reviewData?.message||'',

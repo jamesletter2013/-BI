@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>类目与上架时间诊断 · 淘啊</title><link rel="stylesheet" href="diagnostics-base.css"><link rel="stylesheet" href="listing-diagnostics.css"></head>
+<body><main>
+<p>AI 服务由 ai.taoa.cc 统一管理，本插件只提供商品采集与诊断。</p>
+<h1>类目与上架时间诊断</h1>
+<section><h2>新增：商品加载数据诊断</h2><p>要检查商品加载时的原始详情响应，请回到商品页按 <strong>F12</strong>，在开发者工具顶部选择 <strong>淘啊诊断</strong>（看不到时点 »）。勾选确认 → 开始记录 → 刷新商品页一次 → 停止记录 → 导出脱敏 JSON。</p><p class="muted">仅刷新不会自动记录，须先点开始。下方旧入口只检查页面保留模型，不包含网络响应。无需操作店透视或填写 API 密钥。</p></section>
+<p class="muted">临时验证入口，不是补齐结果。选择你已打开并已正常显示的商品页；无需操作店透视。</p>
+<label for="productTab">已打开的商品</label>
+<div class="actions"><select id="productTab" aria-label="选择已打开的商品页"></select><button id="refresh" type="button">刷新列表</button></div>
+<p class="muted">只读已加载商品模型，不新开或刷新商品页，不请求商品接口，不采评价、不调用 AI。需要登录或验证时请先在商品页正常完成。</p>
+<div class="actions"><button id="export" type="button" class="primary" disabled>诊断并导出 JSON</button><button id="download" type="button" disabled>重新下载本次诊断</button></div>
+<p id="status" role="status" aria-live="polite">正在读取商品标签列表…</p>
+<section id="summary" hidden><h2>诊断结果</h2><dl id="facts"></dl><details><summary>查看导出内容</summary><pre id="preview"></pre></details></section>
+<p class="muted">导出内容仅含商品 ID、类目候选、明确的上架日期、字段名及诊断状态。不包含账号、Cookie、Token、API Key、评价正文、完整网址或整页 HTML；不会自动上传。导出后可把 JSON 文件发给我们排查。</p>
+<p class="muted">“未观察到”仅表示本次检查的已加载模型没有找到，不代表所有接口都没有这个字段。此入口不读取店透视工具栏，也不查询它的服务器。</p>
+</main><script type="module" src="listing-diagnostics.js"></script></body></html>

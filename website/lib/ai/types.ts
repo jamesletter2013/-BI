@@ -6,6 +6,9 @@ export type AIProviderInfo = {
   models: AIModel[];
 };
 export type AIStatus = {
+  balance?: number;
+  price?: number;
+  admin?: boolean;
   companyAllowed?: boolean;
   enabled: boolean;
   authenticated: boolean;
@@ -22,6 +25,7 @@ export type AIStatus = {
 };
 export type AIHistoryMessage = { role: 'user' | 'assistant'; content: string };
 export type AIResponse = {
+  chargedCredits?: number;
   itemId: string;
   requestId: string;
   provider: string;

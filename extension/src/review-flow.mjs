@@ -121,7 +121,7 @@ export async function runReviewFlow({ itemId, exchange, checkpoint, onCheckpoint
     }
     while (s.scopeIndex < s.scopes.length) {
       if (shouldStop()) { reason = 'manual_paused'; break; }
-      if (requests >= (limits.batchPages ?? 5) || now() - started >= limits.elapsedMs) break;
+      if (requests >= (limits.batchPages ?? REVIEW_LIMITS.batchPages) || now() - started >= limits.elapsedMs) break;
       if (s.nextPage > limits.pagesPerScope) { reason = 'page_limit'; break; }
       const index = s.scopeIndex, scope = s.scopes[index].scope, page = s.nextPage;
       requests++;

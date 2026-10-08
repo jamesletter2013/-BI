@@ -70,6 +70,8 @@ export function createReviewJobs({ browser = chrome, store = createReviewStore()
   function options(job) {
     return { checkpoint: job.checkpoint, binding: job.binding,
       shouldStop: () => paused.has(job.id),
+      allowInteractiveVerification,
+      onVerification: async active => { job.verificationPending = active; await save(job); await emit(job); },
       onCheckpoint: async checkpoint => { job.checkpoint = checkpoint; await save(job); await emit(job); } };
   }
   function qaOptions(job) {

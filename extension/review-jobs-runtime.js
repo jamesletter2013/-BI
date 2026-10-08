@@ -18,13 +18,13 @@ var TAOAJOBS = (() => {
   };
   var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-  // Taoa-Competitor-Collector-1.3.6/src/review-jobs.mjs
+  // Taoa-Competitor-Collector-1.3.7/src/review-jobs.mjs
   var review_jobs_exports = {};
   __export(review_jobs_exports, {
     createReviewJobs: () => createReviewJobs
   });
 
-  // Taoa-Competitor-Collector-1.3.6/src/qa-page-request.mjs
+  // Taoa-Competitor-Collector-1.3.7/src/qa-page-request.mjs
   async function qaPageRequest(itemId, descriptor = null, contextId = "", allowVerification = false) {
     const bad = (code) => ({ ok: false, code });
     const validId3 = (v) => typeof v === "string" && /^[1-9]\d{0,31}$/.test(v) || Number.isSafeInteger(v) && v > 0;
@@ -207,7 +207,7 @@ var TAOAJOBS = (() => {
     }
   }
 
-  // Taoa-Competitor-Collector-1.3.6/src/qa-post-detail-reader.mjs
+  // Taoa-Competitor-Collector-1.3.7/src/qa-post-detail-reader.mjs
   var API = "mtop.taobao.social.ugc.post.detail";
   var MAX_INPUT = 2e6;
   var MAX_ANSWERS = 30;
@@ -333,7 +333,7 @@ var TAOAJOBS = (() => {
     };
   }
 
-  // Taoa-Competitor-Collector-1.3.6/src/qa-list-response-reader.mjs
+  // Taoa-Competitor-Collector-1.3.7/src/qa-list-response-reader.mjs
   var API2 = "mtop.taobao.wdj.list.merge.search";
   var MAX_QUESTIONS = 5e3;
   var MAX_PAGE_QUESTIONS = 200;
@@ -566,7 +566,7 @@ var TAOAJOBS = (() => {
     };
   }
 
-  // Taoa-Competitor-Collector-1.3.6/src/qa-request-flow.mjs
+  // Taoa-Competitor-Collector-1.3.7/src/qa-request-flow.mjs
   var validId = (v) => typeof v === "string" && /^\d{1,32}$/.test(v);
   var pageNumber = (v) => Number.isSafeInteger(v) && v >= 1 && v <= 1e3;
   var fail3 = (code) => {
@@ -778,7 +778,7 @@ var TAOAJOBS = (() => {
     }
   }
 
-  // Taoa-Competitor-Collector-1.3.6/src/qa-executor.mjs
+  // Taoa-Competitor-Collector-1.3.7/src/qa-executor.mjs
   var messages = {
     batch_limit: "\u672C\u6279\u95EE\u5927\u5BB6\u5DF2\u4FDD\u5B58\uFF0C\u5C06\u81EA\u52A8\u7EE7\u7EED\u4E0B\u4E00\u6279\uFF1B\u95EE\u5927\u5BB6\u7ED3\u675F\u540E\u518D\u8BFB\u53D6\u8BC4\u4EF7\u3002",
     manual_paused: "\u5DF2\u6682\u505C\u91C7\u96C6\uFF0C\u5DF2\u4FDD\u5B58\u95EE\u5927\u5BB6\u8FDB\u5EA6\u3002",
@@ -973,8 +973,8 @@ var TAOAJOBS = (() => {
     return { qa, error: "", qaCheckpoint: flow?.checkpoint || options.checkpoint, qaBinding: bound };
   }
 
-  // Taoa-Competitor-Collector-1.3.6/src/review-page-request.mjs
-  async function reviewPageRequest(itemId, descriptor = null, contextId = "") {
+  // Taoa-Competitor-Collector-1.3.7/src/review-page-request.mjs
+  async function reviewPageRequest(itemId, descriptor = null, contextId = "", allowVerification = false) {
     const bad = (code) => ({ ok: false, code });
     const id3 = (v) => typeof v === "string" && /^[1-9]\d{0,31}$/.test(v) || Number.isSafeInteger(v) && v > 0;
     const samePage = () => {
@@ -987,10 +987,22 @@ var TAOAJOBS = (() => {
       return String(info.userId);
     };
     const failure = (raw) => {
-      const code = Array.isArray(raw?.ret) ? raw.ret.filter((v) => typeof v === "string").join(",") : "";
+      const code = Array.isArray(raw?.ret) ? raw.ret.filter((v) => typeof v === "string").map((v) => v.split("::")[0]).join(",") : "";
+      if (/USER_INPUT_CANCEL/.test(code)) return bad("verification_cancelled");
+      if (/USER_INPUT_FAILURE/.test(code)) return bad("verification_required");
       if (/SESSION_EXPIRED|SID_INVALID|AUTH_REJECT|NEED_LOGIN|NOT_LOGIN|TOKEN_EMPTY|TOKEN_EXPIRED/.test(code)) return bad("login_required");
-      if (/VALIDATE|RGV587|ASSIST_FLAG|ANTI|ILLEGAL_ACCESS|ACCESS_DENIED|USER_VALIDATE/.test(code)) return bad("verification_required");
       if (/LIMIT|FREQUENT|TRAFFIC/.test(code)) return bad("rate_limited");
+      if (/ILLEGAL_ACCESS|ACCESS_DENIED/.test(code)) return bad("access_denied");
+      if (/VALIDATE|RGV587|ASSIST_FLAG|USER_VALIDATE/.test(code)) {
+        let canOpenVerification = false;
+        try {
+          const url = new URL(raw?.data?.url);
+          canOpenVerification = /RGV587|ASSIST_FLAG/.test(code) && url.protocol === "https:" && !url.username && !url.password && ["taobao.com", "tmall.com"].some((d) => url.hostname === d || url.hostname.endsWith("." + d)) && typeof window.lib?.mtop?.antiCreepRequest === "function";
+        } catch {
+        }
+        return { ...bad("verification_required"), canOpenVerification };
+      }
+      if (/ANTI/.test(code)) return bad("access_denied");
       return bad("upstream_unsuccessful");
     };
     try {
@@ -1000,7 +1012,7 @@ var TAOAJOBS = (() => {
       if (!/^[a-f0-9-]{36}$/.test(contextId)) return bad("invalid_response_shape");
       const contexts = window.__TAOA_REVIEW_CONTEXTS__ ||= /* @__PURE__ */ new Map();
       for (const [key, value] of contexts) if (Date.now() - value.started > 864e5) contexts.delete(key);
-      if (descriptor === null) contexts.set(contextId, { account, itemId, started: Date.now(), filters: [] });
+      if (descriptor === null && !contexts.has(contextId)) contexts.set(contextId, { account, itemId, started: Date.now(), filters: [] });
       const context = contexts.get(contextId);
       if (!context || context.itemId !== itemId) return bad("document_changed");
       if (context.account !== account) return bad("account_changed");
@@ -1107,7 +1119,7 @@ var TAOAJOBS = (() => {
           }
         };
         const reject = (raw) => finish(failure(raw));
-        timer = setTimeout(() => finish(bad("request_timeout")), 22e3);
+        timer = setTimeout(() => finish(bad(allowVerification ? "verification_timeout" : "request_timeout")), allowVerification ? 12e4 : 22e3);
         try {
           const returned = sdk.request({
             api: descriptor.api,
@@ -1123,7 +1135,9 @@ var TAOAJOBS = (() => {
             WindVaneRequest: false,
             LoginRequest: false,
             needLogin: false,
-            AntiCreep: false,
+            // The platform's dialog receives human input; success is still parsed
+            // and bound to this product/account before the cursor can advance.
+            AntiCreep: allowVerification === true,
             AntiFlood: false,
             AntiFlool: false
           }, success, reject);
@@ -1137,7 +1151,7 @@ var TAOAJOBS = (() => {
     }
   }
 
-  // Taoa-Competitor-Collector-1.3.6/src/review-plan.mjs
+  // Taoa-Competitor-Collector-1.3.7/src/review-plan.mjs
   var REVIEW_SCOPES = Object.freeze({
     all: { label: "\u666E\u901A\u5217\u8868", code: "-8" },
     append: { label: "\u8FFD\u8BC4\u5217\u8868", code: "2" },
@@ -1153,7 +1167,7 @@ var TAOAJOBS = (() => {
     return scopeKeys.filter((scope) => supplementalScope(scope) && tabs.some((tab) => String(tab?.status) === "1" && tab?.title === REVIEW_SCOPES[scope].title && tab?.extraInfo?.labelType === "tab" && tab.extraInfo.gray !== true && tab.extraInfo.gray !== "true" && tab.extraInfo.rateType === REVIEW_SCOPES[scope].code));
   }
 
-  // Taoa-Competitor-Collector-1.3.6/src/review-profile.mjs
+  // Taoa-Competitor-Collector-1.3.7/src/review-profile.mjs
   var ALL_PROFILE = "pc-all50-v1";
   var FILTER_PROFILE = "pc-filter20-v1";
   var LEGACY_PROFILE = "pc-legacy20-v1";
@@ -1161,10 +1175,10 @@ var TAOAJOBS = (() => {
   var pageSizeFor = (scope) => scope === "all" ? 50 : 20;
   var knownProfile = (value) => [ALL_PROFILE, FILTER_PROFILE, LEGACY_PROFILE].includes(value);
 
-  // Taoa-Competitor-Collector-1.3.6/src/review-model.mjs
+  // Taoa-Competitor-Collector-1.3.7/src/review-model.mjs
   var REVIEW_API = "mtop.taobao.rate.detaillist.get";
   var REVIEW_VERSION = "6.0";
-  var REVIEW_LIMITS = Object.freeze({ pagesPerScope: 1e3, records: 1e4, elapsedMs: 2e4, batchPages: 5, bytes: 16e6 });
+  var REVIEW_LIMITS = Object.freeze({ pagesPerScope: 1e3, records: 1e4, elapsedMs: 6e4, batchPages: 20, bytes: 16e6 });
   var validId2 = (v) => typeof v === "string" && /^[1-9]\d{0,31}$/.test(v);
   var object = (v) => v && typeof v === "object" && !Array.isArray(v);
   var text3 = (v, max = 5e3) => typeof v === "string" ? v.trim().slice(0, max) : "";
@@ -1287,6 +1301,9 @@ var TAOAJOBS = (() => {
     login_context_missing: "\u5546\u54C1\u9875\u672A\u63D0\u4F9B\u767B\u5F55\u4E0A\u4E0B\u6587\uFF0C\u8BF7\u786E\u8BA4\u767B\u5F55\u540E\u91CD\u8BD5\u3002",
     login_required: "\u767B\u5F55\u5DF2\u5931\u6548\uFF0C\u8BF7\u81EA\u884C\u767B\u5F55\u540E\u91CD\u65B0\u91C7\u96C6\u3002",
     verification_required: "\u63A5\u53E3\u8981\u6C42\u9A8C\u8BC1\u6216\u62D2\u7EDD\u8BBF\u95EE\uFF0C\u5DF2\u505C\u6B62\uFF0C\u672A\u7ED5\u8FC7\u9A8C\u8BC1\u3002",
+    verification_cancelled: "\u4F60\u5DF2\u53D6\u6D88\u5E73\u53F0\u9A8C\u8BC1\uFF0C\u8BC4\u4EF7\u8FDB\u5EA6\u5DF2\u4FDD\u7559\u3002",
+    verification_timeout: "\u7B49\u5F85\u5E73\u53F0\u9A8C\u8BC1\u8D85\u8FC72\u5206\u949F\uFF0C\u5DF2\u505C\u6B62\u5E76\u4FDD\u7559\u8BC4\u4EF7\u8FDB\u5EA6\u3002",
+    access_denied: "\u63A5\u53E3\u62D2\u7EDD\u8BBF\u95EE\uFF0C\u8BC4\u4EF7\u8FDB\u5EA6\u5DF2\u4FDD\u7559\uFF1B\u4E0D\u81EA\u52A8\u91CD\u8BD5\u3002",
     rate_limited: "\u63A5\u53E3\u9650\u6D41\uFF0C\u5DF2\u505C\u6B62\u5E76\u4FDD\u7559\u5DF2\u8BFB\u53D6\u7684\u8BC4\u4EF7\u3002",
     account_changed: "\u767B\u5F55\u8D26\u53F7\u5DF2\u53D8\u5316\uFF0C\u672C\u6B21\u91C7\u96C6\u5DF2\u505C\u6B62\u3002",
     request_timeout: "\u8BC4\u4EF7\u8BF7\u6C42\u8D85\u65F6\uFF0C\u5DF2\u4FDD\u7559\u6B64\u524D\u8BFB\u53D6\u7684\u5185\u5BB9\u3002",
@@ -1307,7 +1324,7 @@ var TAOAJOBS = (() => {
     count_mismatch: "\u5DF2\u5230\u5217\u8868\u672B\u9875\uFF0C\u4F46\u5B9E\u8BFB\u6570\u91CF\u4E0E\u8BE5\u8303\u56F4\u603B\u6570\u4E0D\u4E00\u81F4\u3002"
   };
   var safeReason = (code) => Object.hasOwn(REVIEW_MESSAGES, code) ? code : "transport_failed";
-  var blockedReason = (code) => ["sdk_requires_ui", "login_required", "verification_required", "rate_limited"].includes(code);
+  var blockedReason = (code) => ["sdk_requires_ui", "login_required", "verification_required", "verification_cancelled", "verification_timeout", "access_denied", "rate_limited"].includes(code);
   function unavailableReviews(itemId, reason = "transport_failed") {
     reason = safeReason(reason);
     return {
@@ -1322,7 +1339,7 @@ var TAOAJOBS = (() => {
     };
   }
 
-  // Taoa-Competitor-Collector-1.3.6/src/review-flow.mjs
+  // Taoa-Competitor-Collector-1.3.7/src/review-flow.mjs
   function reviewRequest(itemId, scope, page, advertised = []) {
     if (!validId2(itemId) || !scopeKeys.includes(scope) || !Number.isInteger(page) || page < 1 || page > 1e3 || supplementalScope(scope) && !advertised.includes(scope)) throw new Error("invalid_request");
     const code = REVIEW_SCOPES[scope].code;
@@ -1499,7 +1516,7 @@ var TAOAJOBS = (() => {
           reason = "manual_paused";
           break;
         }
-        if (requests >= (limits.batchPages ?? 5) || now() - started >= limits.elapsedMs) break;
+        if (requests >= (limits.batchPages ?? REVIEW_LIMITS.batchPages) || now() - started >= limits.elapsedMs) break;
         if (s.nextPage > limits.pagesPerScope) {
           reason = "page_limit";
           break;
@@ -1631,7 +1648,7 @@ var TAOAJOBS = (() => {
     return { ...captureFromCheckpoint(s, reason, { requestCount: requests, elapsedMs: now() - started, limits }), checkpoint: s };
   }
 
-  // Taoa-Competitor-Collector-1.3.6/src/review-executor.mjs
+  // Taoa-Competitor-Collector-1.3.7/src/review-executor.mjs
   var inflight2 = /* @__PURE__ */ new Map();
   var fail5 = (code) => {
     throw Object.assign(new Error(code), { code });
@@ -1709,10 +1726,13 @@ var TAOAJOBS = (() => {
         if (!bound && round < 2) await new Promise((r) => setTimeout(r, 750));
       }
       if (!bound) fail5(lastCode);
-      let lastRequest = 0;
+      const started = Date.now();
+      let lastFinished = null;
       const send = async (descriptor) => {
-        const wait = 600 - (Date.now() - lastRequest);
+        const wait = lastFinished === null ? 0 : 3e3 - (Date.now() - lastFinished);
         if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+        if (options.shouldStop?.()) fail5("manual_paused");
+        if (Date.now() - started >= (options.limits?.elapsedMs ?? REVIEW_LIMITS.elapsedMs)) fail5("batch_limit");
         let live;
         try {
           live = await browser.tabs.get(bound.tabId);
@@ -1720,7 +1740,6 @@ var TAOAJOBS = (() => {
           fail5("document_changed");
         }
         if (productId2(live.url) !== itemId) fail5("product_mismatch");
-        lastRequest = Date.now();
         let entries;
         try {
           entries = await bounded2(browser.scripting.executeScript({
@@ -1732,9 +1751,40 @@ var TAOAJOBS = (() => {
         } catch (e) {
           fail5(["request_timeout", "capture_stopped"].includes(e?.code) ? e.code : "document_changed");
         }
-        const entry = entries.find((x) => x.documentId === bound.documentId && x.frameId === 0);
+        let entry = entries.find((x) => x.documentId === bound.documentId && x.frameId === 0);
         if (!entry) fail5("document_changed");
+        if (entry.result?.code === "verification_required" && entry.result.canOpenVerification === true && options.allowInteractiveVerification === true && !options.shouldStop?.()) {
+          let watch, pulses = 0;
+          try {
+            await options.onVerification?.(true);
+            if (options.shouldStop?.()) fail5("manual_paused");
+            await browser.tabs.update(bound.tabId, { active: true });
+            if (browser.windows?.update && Number.isInteger(live.windowId)) await browser.windows.update(live.windowId, { focused: true });
+            if (options.shouldStop?.()) fail5("manual_paused");
+            const stopped2 = new Promise((_, reject) => {
+              watch = setInterval(() => {
+                if (options.shouldStop?.()) reject(Object.assign(new Error("manual_paused"), { code: "manual_paused" }));
+                if (++pulses % 10 === 0) browser.tabs.get(bound.tabId).catch(() => reject(Object.assign(new Error("document_changed"), { code: "document_changed" })));
+              }, 1e3);
+            });
+            entries = await Promise.race([bounded2(browser.scripting.executeScript({
+              target: { tabId: bound.tabId, documentIds: [bound.documentId] },
+              world: "MAIN",
+              func: reviewPageRequest,
+              args: [itemId, descriptor, contextId, true]
+            }), 13e4), stopped2]);
+            entry = entries.find((x) => x.documentId === bound.documentId && x.frameId === 0);
+            if (!entry) fail5("document_changed");
+          } catch (error) {
+            fail5(safeReason(error?.code));
+          } finally {
+            clearInterval(watch);
+            await options.onVerification?.(false);
+          }
+        }
         if (!entry.result?.ok) fail5(safeReason(entry?.result?.code));
+        if (options.shouldStop?.()) fail5("manual_paused");
+        lastFinished = Date.now();
         return entry.result.source;
       };
       const result = await runReviewFlow({
@@ -1752,7 +1802,7 @@ var TAOAJOBS = (() => {
     }
   }
 
-  // Taoa-Competitor-Collector-1.3.6/src/capture-scheduler.mjs
+  // Taoa-Competitor-Collector-1.3.7/src/capture-scheduler.mjs
   var STOP_CODES = /* @__PURE__ */ new Set([
     "login_required",
     "verification_required",
@@ -1831,7 +1881,7 @@ var TAOAJOBS = (() => {
     };
   }
 
-  // Taoa-Competitor-Collector-1.3.6/src/combined-executor.mjs
+  // Taoa-Competitor-Collector-1.3.7/src/combined-executor.mjs
   var inflight3 = /* @__PURE__ */ new Map();
   var stopLabels = {
     login_required: "\u767B\u5F55\u5931\u6548",
@@ -1864,7 +1914,7 @@ var TAOAJOBS = (() => {
             scheduler.check();
             const entries = await browser.scripting.executeScript(spec);
             const entry = entries.find((x) => x.frameId === 0 && (!spec.target.documentIds || spec.target.documentIds.includes(x.documentId)));
-            const inlineVerification = source === "qa" && options.qa?.allowInteractiveVerification === true && entry?.result?.code === "verification_required" && entry.result.canOpenVerification === true && spec.args?.[3] !== true;
+            const inlineVerification = options[source]?.allowInteractiveVerification === true && entry?.result?.code === "verification_required" && entry.result.canOpenVerification === true && spec.args?.[3] !== true;
             if (STOP_CODES.has(entry?.result?.code) && !inlineVerification) scheduler.halt(source, entry.result.code);
             return entries;
           };
@@ -1917,7 +1967,7 @@ var TAOAJOBS = (() => {
     return { ...questionResult, qaPending, qaFinished, reviewData };
   }
 
-  // Taoa-Competitor-Collector-1.3.6/src/review-store.mjs
+  // Taoa-Competitor-Collector-1.3.7/src/review-store.mjs
   function createReviewStore(factory = indexedDB) {
     let database;
     const open = () => database ||= new Promise((resolve, reject) => {
@@ -1942,7 +1992,7 @@ var TAOAJOBS = (() => {
     };
   }
 
-  // Taoa-Competitor-Collector-1.3.6/src/review-jobs.mjs
+  // Taoa-Competitor-Collector-1.3.7/src/review-jobs.mjs
   var prefix = "taoa-reviews:";
   var qaContinueMs = 1e3;
   var reviewContinueMs = 1e4;
@@ -2042,6 +2092,12 @@ var TAOAJOBS = (() => {
         checkpoint: job.checkpoint,
         binding: job.binding,
         shouldStop: () => paused.has(job.id),
+        allowInteractiveVerification,
+        onVerification: async (active) => {
+          job.verificationPending = active;
+          await save(job);
+          await emit(job);
+        },
         onCheckpoint: async (checkpoint) => {
           job.checkpoint = checkpoint;
           await save(job);

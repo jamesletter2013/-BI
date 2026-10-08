@@ -2,6 +2,7 @@
 
 import {
   forwardRef,
+  useCallback,
   useEffect,
   useImperativeHandle,
   useRef,
@@ -18,16 +19,12 @@ import {
   ArrowUp,
   LoaderCircle,
   MoreHorizontal,
-  Settings2,
   ChevronDown,
   FileText,
   Square,
   Maximize2,
 } from 'lucide-react';
-import type { AIStatus } from '@/lib/ai/types';
-import { analysisSystemPrompt } from '@/lib/analysis-prompt';
-import { personalBridge, runPersonalAnalysis, watchPersonalAnalysis, type PersonalAPIStatus, type PersonalJob } from '@/lib/ai/personal';
-import { readAnalysisResponse } from '@/lib/ai/stream';
+import { analyzeWithHost, readHostAIStatus, type HostAIAdapter, type HostAIStatus, type HostAIInput } from '@/lib/ai/host';
 import {
   AnalysisRunCard,
   type AnalysisRun,
@@ -44,7 +41,6 @@ import {
   DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
@@ -71,8 +67,8 @@ type Message = {
 export type OpportunityPanelHandle = { pushData: () => void };
 export const OpportunityPanel = forwardRef<
   OpportunityPanelHandle,
-  { input: AnalysisInput; reviewScope?: ReviewPushScope }
->(function OpportunityPanel({ input, reviewScope = 'bad' }, ref) {
+  { input: AnalysisInput; reviewScope?: ReviewPushScope; hostAI?: HostAIAdapter | null }
+>(function OpportunityPanel({ input, reviewScope = 'bad', hostAI }, ref) {
   const [packet, setPacket] = useState<AnalysisPacket | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [question, setQuestion] = useState(''),
@@ -80,65 +76,31 @@ export const OpportunityPanel = forwardRef<
   const [suggestions, setSuggestions] = useState<AnalysisSuggestion[]>([]);
   const [notice, setNotice] = useState('');
   const [dialog, setDialog] = useState<
-    'settings' | 'reply' | 'consent' | 'packet' | 'compose' | 'jobs' | null
+    'reply' | 'consent' | 'packet' | 'compose' | null
   >(null);
   const [replyError, setReplyError] = useState(''),
     [confirmConsent, setConfirmConsent] = useState(false);
-  const [ai, setAi] = useState<AIStatus | null>(null),
-    [aiStatusMessage, setAiStatusMessage] = useState('正在检查 AI 配置…');
-  const [providerId, setProviderId] = useState('deepseek'),
-    [modelId, setModelId] = useState('deepseek-flash');
-  const [mode,setMode]=useState<'personal'|'company'|'manual'>('personal');
-  const [personal,setPersonal]=useState<PersonalAPIStatus>({installed:false,profiles:[]});
-  const [profileId,setProfileId]=useState<string|null>(null);
-  const [personalNotice,setPersonalNotice]=useState('正在检查个人 API 插件…');
-  const [approvalStamp,setApprovalStamp]=useState('');
-  const activePersonalRequest=useRef<string|null>(null);
-  async function refreshPersonal(){
-    try{const response=await personalBridge('TAOA_PERSONAL_STATUS');
-      if(!alive.current)return;
-      if(![3,4].includes(response.status?.version) || !Array.isArray(response.status.profiles))throw new Error('请更新 V1.3.1 插件后刷新工作台。');
-      setPersonal(response.status);
-      // Initialize once; deleting a selected profile must not silently choose another account.
-      setProfileId(current=>current??response.status.profiles[0]?.id??null);
-      setPersonalNotice(response.status.profiles.length?'可从输入框下方选择本次使用的 API；设置按钮可新增或管理多套配置。':'插件已连接，请添加你的第一套 API。');
-    }catch(error){if(alive.current){setPersonal({installed:false,profiles:[]});setPersonalNotice(error instanceof Error?error.message:'未连接新版插件。');}}
-  }
-  async function openPersonalSettings(){
-    try{await personalBridge('TAOA_PERSONAL_SETTINGS');setNotice('已打开插件设置页。保存后返回此页面会自动刷新配置。');}
-    catch(error){setPersonalNotice(error instanceof Error?error.message:'请更新插件。');setDialog('settings');}
-  }
+  const [ai, setAi] = useState<HostAIStatus | null>(null),
+    [aiStatusMessage, setAiStatusMessage] = useState('正在读取主站 AI 状态…');
+  const statusGeneration = useRef(0);
   const [consent, setConsent] = useState(false),
     [sending, setSending] = useState(false),
     [suggestionOrigin, setSuggestionOrigin] = useState('');
   const pending = useRef<AbortController | null>(null),
     alive = useRef(true);
+  const refreshAI = useCallback(async () => {
+    const generation = ++statusGeneration.current;
+    try { const data = await readHostAIStatus(hostAI); if (alive.current && generation === statusGeneration.current) { setAi(data); setAiStatusMessage(data.message); } }
+    catch (error) { if (alive.current && generation === statusGeneration.current) { setAi(null); setAiStatusMessage(error instanceof Error ? error.message : '暂时无法读取主站状态。'); } }
+  }, [hostAI]);
   useEffect(() => {
     alive.current = true;
-    const controller = new AbortController();
-    void refreshPersonal();
-    window.addEventListener('focus',refreshPersonal);
-    fetch('/api/ai/status', { signal: controller.signal, cache: 'no-store' })
-      .then(async (r) => {
-        if (!r.ok) throw new Error();
-        return (await r.json()) as AIStatus;
-      })
-      .then((data) => {
-        if (!Array.isArray(data.providers) || !data.limits) throw new Error();
-        setAi(data);
-        setAiStatusMessage(data.message);
-      })
-      .catch(() => {
-        if (!controller.signal.aborted)
-          setAiStatusMessage('暂时无法读取 AI 配置；手动草稿仍可使用。');
-      });
-    return () => {
-      alive.current = false;
-      controller.abort();
-      window.removeEventListener('focus',refreshPersonal);
-      pending.current?.abort();
-    };
-  }, []);
+    setAi(null);
+    void refreshAI();
+    window.addEventListener('focus', refreshAI);
+    return () => { alive.current = false; ++statusGeneration.current; window.removeEventListener('focus', refreshAI); pending.current?.abort(); };
+  }, [refreshAI]);
+  useEffect(() => { setConsent(false); }, [hostAI, ai?.termsVersion, ai?.usageNotice]);
   const seq = useRef(0),
     transcript = useRef<HTMLDivElement>(null),
     composer = useRef<HTMLTextAreaElement>(null),
@@ -247,29 +209,10 @@ export const OpportunityPanel = forwardRef<
       );
     }
   }
-  const selectedProvider = ai?.providers.find((p) => p.id === providerId);
-  const selectedProfile=personal.profiles.find(p=>p.id===profileId);
-  const canSendAI = mode==='personal'?Boolean(selectedProfile?.configured):mode==='company'&&Boolean(ai?.companyAllowed && ai?.ready && selectedProvider?.configured);
-  const providers = ai?.providers.length
-    ? ai.providers
-    : [
-        {
-          id: 'deepseek',
-          label: 'DeepSeek 官方',
-          models: [{ id: 'deepseek-flash', label: 'DeepSeek Flash' }],
-        },
-      ];
+  const canSendAI = Boolean(hostAI && ai?.ready);
   async function sendAnalysis(approved = false) {
     if (!packet || !canSendAI || pending.current) return;
-    if (!approved && ((mode==='personal' && !selectedProfile?.consentGranted) || (mode==='company' && !consent))) {
-      setConfirmConsent(false);
-      setApprovalStamp(`${mode}/${selectedProfile?.id}/${selectedProfile?.revision}/${packet.pushedAt}/${question.trim()}`);
-      setDialog('consent');
-      return;
-    }
-    if(approved && mode==='personal' && approvalStamp!==`${mode}/${selectedProfile?.id}/${selectedProfile?.revision}/${packet.pushedAt}/${question.trim()}`){
-      setNotice('配置或资料已变化，请重新确认后发送。');return;
-    }
+    if (!approved && !consent) { setConfirmConsent(false); setDialog('consent'); return; }
     const currentQuestion = question.trim(),
       history = messages
         .filter((m) => m.kind !== 'run' && !m.failed)
@@ -278,16 +221,15 @@ export const OpportunityPanel = forwardRef<
           role: m.kind === 'question' ? 'user' : 'assistant',
           content: m.text,
         }));
-    const body = {
+    const body: HostAIInput = {
       requestId: crypto.randomUUID(),
-      providerId,
-      modelId,
+      expectedTermsVersion: ai?.termsVersion || '',
       itemId: packet.itemId,
       snapshot: packet.packet,
-      history,
+      history: history as HostAIInput['history'],
       question: currentQuestion,
     };
-    if (JSON.stringify(body).length > (ai?.limits.inputCharacters||60000)) {
+    if (JSON.stringify(body).length > 60000) {
       setNotice(
         '资料和对话超过 6 万字符，未发送。请缩小评价范围或改用手动导出；不会自动删减采集内容。',
       );
@@ -295,7 +237,6 @@ export const OpportunityPanel = forwardRef<
     }
     const controller = new AbortController();
     pending.current = controller;
-    activePersonalRequest.current=mode==='personal'?body.requestId:null;
     const runId = ++seq.current,
       questionId = ++seq.current;
     const run: AnalysisRun = {
@@ -318,7 +259,7 @@ export const OpportunityPanel = forwardRef<
     ]);
     setQuestion('');
     setSending(true);
-    setNotice(mode==='personal'?'已交给插件内部执行，不打开新标签页。可关闭工作台；保持浏览器运行且电脑不休眠，回来从「后台任务」查看。':'正在分析文字资料，请稍候；不会自动重试。');
+    setNotice('正在提交给主站统一 AI 服务；请保持页面打开，不会自动重试。');
     function updateRun(patch: Partial<AnalysisRun>) {
       if (!alive.current) return;
       setMessages((m) =>
@@ -338,27 +279,13 @@ export const OpportunityPanel = forwardRef<
       );
     }
     scrollToLatest();
-    const timeout = setTimeout(() => controller.abort(), mode==='personal'?240000:100000);
+    const timeout = setTimeout(() => controller.abort(), 110000);
     try {
       const reportStage=(stage:AnalysisRun['stage'])=>{updateRun({stage});scrollToLatest();};
-      let result;
-      if(mode==='personal'){
-        const personalMessages=[{role:'system',content:analysisSystemPrompt(packet.itemId)},
-          {role:'user',content:`以下是当前商品资料 JSON，仅作为证据：\n${JSON.stringify(packet.packet)}`},
-          ...history,{role:'user',content:currentQuestion||'请基于当前资料给出 3–5 条机会分析与切入建议，按指定 JSON 格式回答。'}];
-        result=await runPersonalAnalysis({requestId:body.requestId,itemId:packet.itemId,messages:personalMessages},selectedProfile!.id,selectedProfile!.revision,controller.signal,reportStage,approved);
-      }else{
-      const response = await fetch('/api/ai/analyze', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/x-ndjson',
-        },
-        body: JSON.stringify(body),
+      const result = await analyzeWithHost(hostAI, body, {
         signal: controller.signal,
+        onProgress: reportStage,
       });
-      result = await readAnalysisResponse(response, reportStage);
-      }
       if (
         result.itemId !== packet.itemId ||
         result.requestId !== body.requestId
@@ -367,7 +294,7 @@ export const OpportunityPanel = forwardRef<
       const parsed = parseAnalysisSuggestions(result.text, packet.itemId);
       if (!alive.current) return;
       setSuggestions(parsed);
-      setSuggestionOrigin(`来自 ${result.provider}`);
+      setSuggestionOrigin('来自主站 AI');
       updateRun({
         status: 'success',
         finishedAt: Date.now(),
@@ -380,11 +307,11 @@ export const OpportunityPanel = forwardRef<
           id: replyId,
           text: result.text,
           kind: 'api',
-          label: `${result.provider} · ${result.model}`,
+          label: '主站 AI',
         },
       ]);
       setNotice(
-        `已生成 ${parsed.length} 条建议。${result.notice}${result.usage?.inputTokens != null ? ` 输入 ${result.usage.inputTokens} / 输出 ${result.usage.outputTokens ?? '未知'} tokens。` : ''}`,
+        `已生成 ${parsed.length} 条建议。${typeof result.notice === 'string' ? result.notice : '用量记录以主站为准。'}`,
       );
       requestAnimationFrame(() =>
         transcript.current?.scrollTo({
@@ -394,10 +321,8 @@ export const OpportunityPanel = forwardRef<
       );
     } catch (error) {
       if (alive.current) {
-        const message = controller.signal.aborted && activePersonalRequest.current
-          ? '已断开进度查看。后台任务不会因此重发或停止，请从「后台任务」检查结果。'
-          : controller.signal.aborted
-          ? '分析已取消或超时；服务商可能已计费。资料与原有建议保留，不会自动重试。'
+        const message = controller.signal.aborted
+          ? '已停止等待。请到主站确认实际结果和用量后再决定是否重试；取消等待不等于服务端已取消。'
           : error instanceof Error
             ? error.message
             : '发送失败，资料已保留。';
@@ -413,60 +338,17 @@ export const OpportunityPanel = forwardRef<
     } finally {
       clearTimeout(timeout);
       pending.current = null;
-      activePersonalRequest.current=null;
-      if (alive.current) {setSending(false);void refreshPersonal();}
+      if (alive.current) {setSending(false);void refreshAI();}
     }
   }
-  async function cancelAnalysis(){
-    const requestId=activePersonalRequest.current;
-    if(requestId){
-      try{await personalBridge('TAOA_PERSONAL_CANCEL',{requestId});}
-      catch(error){setNotice(error instanceof Error?error.message:'停止失败，请查看后台任务。');}
-      return;
-    }
-    pending.current?.abort();
-  }
-  async function restorePersonalJob(requestId:string){
-    if(pending.current)return;
-    const controller=new AbortController();pending.current=controller;activePersonalRequest.current=requestId;setSending(true);
-    let runId=0;
-    try{
-      const {job}:{job:PersonalJob}=await personalBridge('TAOA_PERSONAL_JOB',{requestId});
-      if(!alive.current)return;
-      // Recover the exact submitted snapshot, never rebuild it from another product.
-      const raw=job.input.messages[1]?.content||'';
-      const snapshot=JSON.parse(raw.slice(raw.indexOf('\n')+1)) as AnalysisPacket['packet'];
-      if(snapshot?.snapshot?.itemId!==job.itemId || !snapshot.reviews || !snapshot.questions || !Array.isArray(snapshot.parameters))throw new Error('后台快照不完整，未替换当前资料。');
-      const recovered:AnalysisPacket={itemId:job.itemId,pushedAt:snapshot.snapshot.pushedAt,packet:snapshot,
-        text:job.input.messages.slice(0,2).map(m=>m.content).join('\n\n'),summary:`已恢复商品 ${job.itemId} 的提交快照 · ${job.profileName} · ${job.model}`};
-      setPacket(recovered);setMode('personal');setSuggestions([]);setSuggestionOrigin('');setDialog(null);setQuestion('');
-      runId=++seq.current;
-      setMessages([...job.input.messages.slice(2).map(m=>({id:++seq.current,text:m.content,kind:m.role==='user'?'question' as const:'reply' as const,sent:true})),
-        {id:runId,kind:'run',text:'',run:{requestId,stage:job.stage,status:'pending',startedAt:job.createdAt,question:job.input.messages.at(-1)?.content||''}}]);
-      setNotice('已恢复后台任务，仅查看结果，不会重新调用 API。');
-      const result=await watchPersonalAnalysis(requestId,controller.signal,stage=>{
-        if(alive.current)setMessages(m=>m.map(x=>x.id===runId&&x.run?{...x,run:{...x.run,stage}}:x));
-      });
-      if(!alive.current)return;
-      if(result.itemId!==job.itemId||result.requestId!==requestId)throw new Error('结果与后台任务不一致。');
-      const parsed=parseAnalysisSuggestions(result.text,job.itemId);
-      setSuggestions(parsed);setSuggestionOrigin(`来自 ${result.provider}`);
-      setMessages(m=>[...m.map(x=>x.id===runId&&x.run?{...x,run:{...x.run,status:'success' as const,finishedAt:Date.now(),count:parsed.length}}:x),
-        {id:++seq.current,kind:'api',text:result.text,label:`${result.provider} · ${result.model}`}]);
-      setNotice(`已取回商品 ${job.itemId} 的 ${parsed.length} 条建议，没有再次调用 API。`);
-    }catch(error){
-      if(alive.current){const message=error instanceof Error?error.message:'后台任务读取失败。';setNotice(message);
-        setMessages(m=>m.map(x=>x.id===runId&&x.run?{...x,run:{...x.run,status:'failed',finishedAt:Date.now(),error:message}}:x));}
-    }finally{pending.current=null;activePersonalRequest.current=null;if(alive.current){setSending(false);void refreshPersonal();}}
-  }
+  function cancelAnalysis(){ pending.current?.abort(); }
   function submitComposer() {
     if (pending.current || !packet) return;
     if (canSendAI) void sendAnalysis();
-    else if(mode==='manual' && packet) addQuestion();
-    else setDialog('settings');
+    else setNotice(aiStatusMessage);
   }
   function submitExpandedComposer() {
-    if(pending.current || !packet || (mode==='manual'&&!question.trim()))return;
+    if(pending.current || !packet || !canSendAI)return;
     setDialog(null);
     submitComposer();
   }
@@ -496,8 +378,8 @@ export const OpportunityPanel = forwardRef<
         </button>
       </div>
       <p className="my-3 text-sm leading-6 text-muted-foreground">
-        推送已采资料 · 选择 AI 分析或手动草稿 · 建议回填左侧。评价范围：
-        {pushScopeLabels[reviewScope]}。推送本身不调用 API。
+        推送已采资料 · 使用 ai.taoa.cc 统一 AI 服务 · 建议回填左侧。评价范围：
+        {pushScopeLabels[reviewScope]}。
       </p>
       <div className="grid items-start gap-4 lg:grid-cols-[1.2fr_1fr]">
         <section
@@ -582,10 +464,7 @@ export const OpportunityPanel = forwardRef<
         >
           <header className="flex shrink-0 items-center justify-between gap-2 bg-[#773014] px-4 py-3 text-white">
             <h3 className="text-base font-semibold">分析对话</h3>
-            <button type="button" disabled={sending} onClick={()=>{setDialog('jobs');void refreshPersonal();}} className="ml-auto rounded-full bg-white/15 px-2 py-1 text-xs hover:bg-white/25 disabled:opacity-40">后台任务{personal.jobs?.length?` · ${personal.jobs.length}`:''}</button>
-            <span className="rounded-full bg-white/15 px-2 py-1 text-xs">
-              {sending ? '分析中' : mode==='personal' ? (selectedProfile?.configured?'个人 API':'待配置个人 API') : canSendAI ? '公司 API' : '手动模式'}
-            </span>
+            <span className="rounded-full bg-white/15 px-2 py-1 text-xs">{sending ? '分析中' : '主站 AI'}</span>
           </header>
           <div
             ref={transcript}
@@ -709,46 +588,9 @@ export const OpportunityPanel = forwardRef<
               />
               </div>
               <div className="mt-2 flex min-w-0 items-center gap-1.5">
-                <div className="relative min-w-0 max-w-56 flex-1 sm:flex-none">
-                  <select
-                    aria-label="选择个人 API、公司 API 或手动草稿"
-                    value={mode==='company'?JSON.stringify([providerId,modelId]):mode==='personal'&&selectedProfile?`personal:${selectedProfile.id}`:mode}
-                    disabled={sending}
-                    onChange={(e) => {
-                      setNotice('');
-                      if(e.target.value.startsWith('personal:')){
-                        setProfileId(e.target.value.slice(9));setMode('personal');setConsent(false);return;
-                      }
-                      if(['personal','manual'].includes(e.target.value)){
-                        setMode(e.target.value as 'personal'|'manual');setConsent(false);return;
-                      }
-                      const [provider, model] = JSON.parse(e.target.value);
-                      setMode('company');
-                      setProviderId(provider);
-                      setModelId(model);
-                      setConsent(false);
-                    }}
-                    className="w-full cursor-pointer appearance-none truncate rounded-lg bg-secondary/60 py-2 pl-2.5 pr-7 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
-                  >
-                    {!selectedProfile && <option value="personal">{profileId&&personal.profiles.length?'原配置已删除 · 请选择':'个人 API · 待配置'}</option>}
-                    {personal.profiles.length>0 && <optgroup label="我的 API">{personal.profiles.map(p=><option key={p.id} value={`personal:${p.id}`}>{p.name} · {p.model}{p.configured?'':'（待填密钥）'}</option>)}</optgroup>}
-                    <option value="manual">手动草稿（不调用 API）</option>
-                    {ai?.companyAllowed && providers.map((p) => (
-                      <optgroup key={p.id} label={p.label}>
-                        {p.models.map((m) => (
-                          <option
-                            key={m.id}
-                            value={JSON.stringify([p.id, m.id])}
-                          >
-                            {m.label}
-                          </option>
-                        ))}
-                      </optgroup>
-                    ))}
-                  </select>
-                  <ChevronDown className="pointer-events-none absolute right-2 top-2.5 size-3.5 text-muted-foreground" />
+                <div className="min-w-0 flex-1">
+                  <span className="text-sm text-muted-foreground">AI 由 ai.taoa.cc 统一提供</span>
                 </div>
-                <button type="button" disabled={sending} onClick={()=>void openPersonalSettings()} aria-label="设置自己的 API" title="设置自己的 API" className="grid size-9 shrink-0 place-items-center rounded-lg text-primary hover:bg-secondary disabled:opacity-40"><Settings2 className="size-4"/></button>
                 <DropdownMenu>
                   <DropdownMenuTrigger
                     type="button"
@@ -794,11 +636,6 @@ export const OpportunityPanel = forwardRef<
                       <Plus />
                       仅加入草稿
                     </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem onClick={() => setDialog('settings')}>
-                      <Settings2 />
-                      配置与使用说明
-                    </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
                 <div className="ml-auto flex shrink-0 items-center gap-2">
@@ -815,13 +652,13 @@ export const OpportunityPanel = forwardRef<
                   ) : (
                     <button
                       type="submit"
-                      aria-label={canSendAI ? '发送并生成建议' : mode==='manual'?'加入草稿':'配置 API'}
+                      aria-label={canSendAI ? '发送并生成建议' : '主站 AI 暂不可用'}
                       title={
                         canSendAI
                           ? '发送并生成建议（Enter 发送，Shift+Enter 换行）'
-                          : mode==='manual'?'加入草稿（Enter 发送，不调用 AI）':'配置你自己的 API'
+                          : aiStatusMessage
                       }
-                      disabled={!packet || (mode==='manual' && !question.trim())}
+                      disabled={!packet || !canSendAI}
                       className="grid size-9 place-items-center rounded-full bg-primary text-white transition-colors hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-35"
                     >
                       <ArrowUp className="size-5" />
@@ -834,10 +671,7 @@ export const OpportunityPanel = forwardRef<
               role="status"
               className="mt-2 max-h-10 overflow-y-auto break-words px-1 text-xs leading-5 text-muted-foreground"
             >
-              {notice ||
-                (mode==='personal'?(selectedProfile?`${selectedProfile.name} · ${selectedProfile.host}${selectedProfile.configured?' · 仅使用本套 API':' · 请补填本次会话密钥'}`:personalNotice):canSendAI
-                  ? '仅分析文字 · 首次发送需确认 · 更多操作见 ···'
-                  : '手动草稿不调用 AI · 复制 / 粘贴回复见 ···')}
+              {notice || aiStatusMessage}
             </p>
           </div>
         </section>
@@ -851,87 +685,38 @@ export const OpportunityPanel = forwardRef<
         <DialogContent className={`max-h-[85dvh] overflow-y-auto ${dialog==='compose'?'sm:max-w-4xl':'sm:max-w-lg'}`}>
           <DialogHeader>
             <DialogTitle>
-              {dialog === 'jobs' ? '后台 AI 任务' : dialog === 'compose' ? '展开编辑' : dialog === 'reply'
+              {dialog === 'compose' ? '展开编辑' : dialog === 'reply'
                 ? '粘贴 AI 回复'
                 : dialog === 'consent'
                   ? '确认发送分析'
                   : dialog === 'packet'
                     ? '已推送的分析资料'
-                    : '配置与使用说明'}
+                    : '分析对话'}
             </DialogTitle>
             <DialogDescription>
-              {dialog === 'jobs' ? '个人 API 最近 10 次任务；仅查看进度和取回结果，不会重新调用。' : dialog === 'compose' ? '长内容在这里编辑；收起或按 Esc 会保留文字。Enter 发送，Shift+Enter 换行。' : dialog === 'reply'
+              {dialog === 'compose' ? '长内容在这里编辑；收起或按 Esc 会保留文字。Enter 发送，Shift+Enter 换行。' : dialog === 'reply'
                 ? '把现有 AI 的回复整理为左侧建议，不调用 API。'
                 : dialog === 'consent'
-                  ? '确认后将调用所选 AI，可能产生 API 费用。'
+                  ? '本次调用使用主站的统一服务和使用规则。'
                   : dialog === 'packet'
                     ? '只包含当前已采集快照，未读取的内容不会补写。'
-                    : '个人密钥在插件内填写，只发往你选择的接口；手动草稿始终可用。'}
+                    : 'AI 由平台统一提供，无需配置接口或密钥。'}
             </DialogDescription>
           </DialogHeader>
-          {dialog==='jobs' && <div className="space-y-3 text-sm">
-            <p className="rounded-xl bg-secondary p-3 leading-6">关闭工作台不影响已提交的个人 API 任务。请保持 Chrome 运行、电脑不休眠。任务和密钥仅保留在本次浏览器会话；退出浏览器或重载插件会清除，请及时复制结果。</p>
-            <p className="text-xs text-muted-foreground">取回会替换当前对话草稿，使用当时提交的商品快照；不会改变上方已采集资料。</p>
-            <button type="button" onClick={()=>void refreshPersonal()} className="rounded-lg border border-input px-3 py-2">刷新任务状态</button>
-            {!personal.installed && <output className="block">{personalNotice}</output>}
-            {personal.installed && !personal.jobs?.length && <p className="py-5 text-center text-muted-foreground">本次浏览器会话还没有后台任务</p>}
-            {personal.jobs?.map(job=><div key={job.requestId} className="rounded-xl border border-input p-3">
-              <p className="font-medium">商品 {job.itemId} · {job.status==='running'?'分析中':job.status==='success'?'已完成':'已停止'}</p>
-              <p className="mt-1 text-xs text-muted-foreground">{job.profileName} · {job.model} · {new Date(job.createdAt).toLocaleString()}</p>
-              <button type="button" disabled={sending} onClick={()=>void restorePersonalJob(job.requestId)} className="mt-3 rounded-lg bg-primary px-3 py-2 text-white disabled:opacity-40">{job.status==='running'?'查看实时进度':job.status==='success'?'取回建议':'查看停止原因'}</button>
-            </div>)}
-          </div>}
           {dialog==='compose' && <div className="space-y-3">
             <label className="sr-only" htmlFor="expanded-question">完整问题或要求</label>
             <textarea id="expanded-question" autoFocus disabled={sending} value={question} onChange={e=>setQuestion(e.target.value)}
               onCompositionStart={()=>{composing.current=true;}} onCompositionEnd={()=>{composing.current=false;}} onKeyDown={handleComposerKeyDown}
               maxLength={6000} placeholder="输入完整的分析问题或要求…" className="h-[48dvh] min-h-40 w-full resize-none rounded-xl border border-input bg-[#fffaf6] p-4 text-base leading-7 outline-none focus:ring-2 focus:ring-primary/20" />
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <span className="text-xs text-muted-foreground">{question.length} / 6000 字符 · {mode==='personal'?(selectedProfile?.name||'个人 API 待配置'):mode==='manual'?'手动草稿':selectedProvider?.label}</span>
+              <span className="text-xs text-muted-foreground">{question.length} / 6000 字符 · 主站 AI</span>
               <div className="flex gap-2">
                 <button type="button" onClick={()=>setDialog(null)} className="rounded-lg border border-input px-4 py-2 text-sm">收起编辑</button>
-                <button type="button" disabled={sending||!packet||(mode==='manual'&&!question.trim())} onClick={submitExpandedComposer} className="rounded-lg bg-primary px-4 py-2 text-sm text-white disabled:opacity-40">{canSendAI?'发送分析':mode==='manual'?'加入草稿':'配置 API'}</button>
+                <button type="button" disabled={sending||!packet||!canSendAI} onClick={submitExpandedComposer} className="rounded-lg bg-primary px-4 py-2 text-sm text-white disabled:opacity-40">发送分析</button>
               </div>
             </div>
             {!packet && <p className="text-xs text-muted-foreground">可以先编辑问题，推送商品资料后即可发送。</p>}
           </div>}
-          {dialog === 'settings' && (
-            <div className="space-y-3 text-sm leading-6">
-              <p className="rounded-xl bg-secondary p-3">{personalNotice}</p>
-              <button type="button" disabled={sending} onClick={()=>void openPersonalSettings()} className="rounded-lg bg-primary px-4 py-2 text-white disabled:opacity-40">打开个人 API 设置</button>
-              <button type="button" onClick={()=>void refreshPersonal()} className="ml-2 rounded-lg border border-input px-3 py-2">刷新连接</button>
-              <p>
-                可新增多套具名 API，分别填写 HTTPS 接口地址、模型 ID 和 API Key，在输入框下方选择本次使用哪套。支持 Chat Completions（OpenAI 兼容）、Claude Messages、Gemini generateContent；不支持任意厂商的所有专有协议。
-              </p>
-              <p>费用从所选 API 账户扣除。新版每套 API 首次确认一次，后续主动发送直接调用；修改地址、模型、分析模式或输出上限需重新确认，可在插件设置撤销。DeepSeek 默认普通分析，也可选深度思考；4000 tokens 是单次输出预算，不是模型容量。由插件内部执行，不打开新标签页。关闭工作台后可从「后台任务」取回结果；保持浏览器运行、电脑不休眠。失败不重试、不改用其他密钥。仅分析文字与图片链接，不识别图像。公司模式仍由当前网页等待回复。</p>
-              <p>密钥仅保存在当前浏览器会话中，重启浏览器或重载插件后需重填。不要把密钥粘贴到对话框或商品资料里。</p>
-              <div className="rounded-xl border border-input p-3"><a href="/downloads/taoa-collector-1.3.6.zip" download className="font-medium text-primary underline">下载 V1.3.6 插件 · 评价批次等待 10 秒</a><p className="mt-1 text-xs text-muted-foreground">先等当前任务结束并保存结果，再备份原加载目录、将新版文件覆盖进去，在扩展管理页点击重新加载。保留原目录和扩展 ID，不要删除扩展或清空存储，以免丢失采集记录。重载后个人密钥需重填，再刷新工作台。首次安装可选择「加载已解压的扩展程序」。正式商店分发尚未开启。</p></div>
-              {ai?.companyAllowed && (
-                <details><summary>公司模式说明（仅授权员工）</summary><p>{aiStatusMessage}</p>
-                <p>
-                  每人每日{' '}
-                  {ai.limits.userDaily === null
-                    ? '不限次数'
-                    : `最多 ${ai.limits.userDaily} 次`}{' '}
-                  / 团队每日{' '}
-                  {ai.limits.teamDaily === null
-                    ? '不限次数'
-                    : `最多 ${ai.limits.teamDaily} 次`}
-                  ；最多 6 万字符输入、
-                  {ai.limits.outputTokens} tokens
-                  输出。仍保留调用记录；费用按服务商实际用量计算，不是金额上限。
-                </p></details>
-              )}
-              <p>
-                发送本次快照、最近 12
-                条对话及当前问题；超长不会自动删减。更新资料会清空这一轮对话。
-              </p>
-              <p className="text-muted-foreground">
-                未发送草稿仅本页暂存；已提交的个人 API 任务可在本次浏览器会话中从「后台任务」取回。退出浏览器前请从「更多」复制或下载结果。Enter
-                发送，Shift+Enter 换行。中文输入法选字时不会发送。
-              </p>
-            </div>
-          )}
           {dialog === 'reply' && (
             <div className="space-y-3">
               <label className="sr-only" htmlFor="analysis-reply">
@@ -963,41 +748,19 @@ export const OpportunityPanel = forwardRef<
           )}
           {dialog === 'consent' && (
             <div className="space-y-4 text-sm leading-6">
-              <p className="rounded-xl bg-secondary p-3">
-                {mode==='personal'?selectedProfile?.name:selectedProvider?.label} ·{' '}
-                {mode==='personal'?selectedProfile?.model:selectedProvider?.models.find((m) => m.id === modelId)?.label}
-                {mode==='personal' && <><br/>接收域名：{selectedProfile?.host}<br/>输出上限：{selectedProfile?.maxTokens} tokens</>}
-                {mode==='personal' && selectedProfile?.thinking && <><br/>分析模式：{selectedProfile.thinking==='enabled'?'深度思考（思考内容可能占用输出预算）':'普通分析'}</>}
-                <br />
-                发送商品资料快照、最近 12
-                条对话及当前问题。图片仅以链接收录，不进行图片识别。
-              </p>
-              {mode==='personal' && <p className="text-muted-foreground">使用这套个人 API 账户付费，不自动切换其他账户。第三方接口会收到密钥和资料，请确认你信任上述域名。发送后在插件内部执行，不打开分析页；关闭工作台不会取消，退出浏览器或休眠可能中断。</p>}
-              {mode==='personal' && <p className="text-muted-foreground">{personal.version===4?'本机记住这套 API 的授权，后续点击发送将直接调用并计费，不再弹窗。修改接收地址、接口格式、模型、分析模式或输出上限后重新确认。可在插件设置的「更多设置」撤销授权。':'当前插件为旧版，仍需每次确认。更新 V1.3.1 后即可记住本套授权。'}</p>}
-              {mode==='company' && ai && (
-                <p className="text-muted-foreground">
-                  使用公司额度：每人每日{' '}
-                  {ai.limits.userDaily === null
-                    ? '不限次数'
-                    : `${ai.limits.userDaily} 次`}
-                  ，团队每日{' '}
-                  {ai.limits.teamDaily === null
-                    ? '不限次数'
-                    : `${ai.limits.teamDaily} 次`}
-                  。 费用按实际用量计算；取消后服务商可能已计费。
-                </p>
-              )}
+              <p className="rounded-xl bg-secondary p-3">{ai?.usageNotice}<br/>将发送商品资料快照、最近 12 条对话和当前问题给主站 AI。图片仅以链接收录，不做图片识别。</p>
+              <p>账号权限、模型和用量由 ai.taoa.cc 统一管理。本模块不设置独立接口或计费规则。</p>
               <label className="flex items-start gap-2">
                 <Checkbox
                   checked={confirmConsent}
                   onCheckedChange={(value) => setConfirmConsent(Boolean(value))}
                   className="mt-1"
                 />
-                {mode==='personal'?(personal.version===4?'同意使用这套 API 发送分析资料并承担费用，在本机记住授权':'同意本次将资料发送到上述接口，并由所选个人 API 账户承担费用'):'同意本轮对话将资料发送至所选 AI，并使用公司 API 额度'}
+                同意本轮将资料发送给主站 AI，并按上述主站规则使用
               </label>
               <button
                 type="button"
-                disabled={!confirmConsent || sending}
+                disabled={!confirmConsent || sending || !canSendAI}
                 onClick={() => {
                   setConsent(true);
                   setDialog(null);

@@ -1,0 +1,69 @@
+给 ai.taoa.cc 开发方：只接原站服务，不让客户配置 AI
+
+一、唯一对接位置
+website/lib/host-ai-adapter.ts 导出 hostAIAdapter，默认 null。
+类型定义在 website/lib/ai/host.ts（HostAIAdapter / HostAIInput / HostAIResult）。
+app/page.tsx 已将该适配器传入 OpportunityPanel。
+也可在原站直接挂载 OpportunityPanel，并通过 hostAI prop 提供稳定的适配器实例。
+不要在每次 render 时重新创建实例，否则正在进行的请求会被取消。
+
+适配器需实现两个方法（方法名是本模块约定，不代表原站真实 URL）：
+1. getStatus()：从主站读取当前用户实际是否允许使用 AI，返回
+   { ready, message, usageNotice, termsVersion }。
+   ready=true 时 usageNotice 和 termsVersion 必须非空；usageNotice 用于调用前确认。
+   模型、扣分规则、余额与充值继续由主站后台管理，本模块没有用户选择入口。
+2. analyze(input, { signal, onProgress })：调用主站现有的、经过认证的分析服务。
+   input 包括 requestId、itemId、snapshot、history、question、expectedTermsVersion。
+   不传 API Key、不让浏览器指定模型/单价、不在前端扣余额。
+   返回 { requestId, itemId, text, notice? }。
+   text 是建议 JSON 文本，需包含同一 itemId 和 suggestions 数组；
+   建议字段 title / priority / evidence / action / validation，参见
+   lib/analysis-packet.ts 与 lib/analysis-prompt.ts。建议保持 3–5 条。
+   onProgress 只接受 validating/requesting/organizing 等真实阶段，不伪造百分比。
+
+二、必须由原站服务端负责
+- 会话、用户权限、管理员权限，以及统一模型和密钥读取。
+- 服务端确认当前价格/使用规则，检测 expectedTermsVersion 变化；旧规则不能静默扣费。
+- 按用户和 requestId 幂等，检查同一 ID 不能换输入/用户。
+- 余额不足不调用模型，原子预占/扣费与失败处理；客户端状态不能代替服务端校验。
+- 提交前校验商品 ID、快照内容、字符上限、对话长度和敏感数据。
+- 成功结果持久化供断线查回；取消浏览器等待不等于服务端任务已取消。
+- 不在 URL、日志或插件消息里发送密钥/会话令牌；保留 CSRF 和同源访问防护。
+- 账号切换/退出时清空当前用户分析上下文并按原站账号身份重新挂载工作区。
+
+本包未包含原站的真实接口或调用凭据，不能把网站首页 URL 当作 AI API。
+如原站采用 NDJSON，可按 lib/ai/stream.ts 中的历史响应解析方式作适配；
+也可直接返回 HostAIResult。此解析工具不包含请求地址或独立 AI 配置。
+当前页面只发送文字快照与图片链接，不执行图像识别。
+
+三、分区集成和插件
+建议原站新增“竞品分析”导航，例如 /competitor；路径仅示例，开发方确定。
+不要覆盖原站根 layout 和全局样式；复用 app/page.tsx 的业务结构及 components。
+插件 extension/background.js 的 WORKBENCH_URL 仍保留旧公开工作台地址，
+extension/manifest.json 的主站 bridge matches/host_permissions 也尚未改动。
+开发方确定最终路径后一起修改，保持精确 origin/path 和消息发送方校验。
+不要改成任意来源，不要用 iframe 或跨域复制令牌来代替安全身份对接。
+个人 API options 已替换为 listing-diagnostics.html，只保留诊断设置。
+本包不会读取、迁移或清除已安装旧插件中用户保存的凭据；旧安装目录未修改。
+
+采集消息保留：TAOA_START_CAPTURE / TAOA_REQUEST_CAPTURE /
+TAOA_REVIEW_STATUS / TAOA_REVIEW_CONTROL / TAOA_DOWNLOAD_IMAGES，
+回传 TAOA_PRODUCT_CAPTURE / TAOA_REVIEW_PROGRESS 及相关状态/错误。
+完整数据结构和过滤条件以 website/app/page.tsx 与 extension/bridge.js 为准。
+验证仍需用户正常完成，不新增绕过限制或自动解验证码功能。
+
+四、本地检查
+website 内执行 npm ci、npm run dev、npx tsc --noEmit --incremental false、
+node --test tests/*.test.mjs、npm run build。
+package.json 要求 Node >=22.13.0；本轮验证使用 Node 26，Node 直接运行 TS 的兼容性
+由接入方自己的测试环境确认。插件重建：在包根目录 node scripts/build-extension.mjs。
+本次检查复用已有依赖并更新锁文件，没有在全新机器上执行联网安装。
+.openai/hosting.json 是无项目 ID、无数据库绑定的本地模板，不能回部署到旧站。
+
+五、上线前验收
+[ ] 页面没有个人 API、模型配置、独立注册/充值/管理员入口。
+[ ] 未接适配器或主站不允许时不能发送分析，不出现虚假的“已连接”。
+[ ] 主站登录、权限、配额、并发、断线、取消、幂等和规则变更联调通过。
+[ ] 相同商品和请求的真实回复能生成建议，不串商品、不覆盖旧结果。
+[ ] 新域名插件消息、图片 JPG 打包、评价/问大家 Excel 下载正常。
+[ ] 原站生图、对话、画布及原余额不受影响；完成依赖审计和回滚方案。

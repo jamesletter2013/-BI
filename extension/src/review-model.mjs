@@ -2,7 +2,7 @@ import { advertisedScopes } from './review-plan.mjs';
 import { profileFor, pageSizeFor } from './review-profile.mjs';
 export const REVIEW_API = 'mtop.taobao.rate.detaillist.get';
 export const REVIEW_VERSION = '6.0';
-export const REVIEW_LIMITS = Object.freeze({ pagesPerScope: 1000, records: 10000, elapsedMs: 20000, batchPages: 5, bytes: 16_000_000 });
+export const REVIEW_LIMITS = Object.freeze({ pagesPerScope: 1000, records: 10000, elapsedMs: 60000, batchPages: 20, bytes: 16_000_000 });
 export const validId = v => typeof v === 'string' && /^[1-9]\d{0,31}$/.test(v);
 const object = v => v && typeof v === 'object' && !Array.isArray(v);
 export const text = (v, max = 5000) => typeof v === 'string' ? v.trim().slice(0, max) : '';
@@ -95,6 +95,9 @@ export const REVIEW_MESSAGES = {
   login_context_missing: '商品页未提供登录上下文，请确认登录后重试。',
   login_required: '登录已失效，请自行登录后重新采集。',
   verification_required: '接口要求验证或拒绝访问，已停止，未绕过验证。',
+  verification_cancelled: '你已取消平台验证，评价进度已保留。',
+  verification_timeout: '等待平台验证超过2分钟，已停止并保留评价进度。',
+  access_denied: '接口拒绝访问，评价进度已保留；不自动重试。',
   rate_limited: '接口限流，已停止并保留已读取的评价。',
   account_changed: '登录账号已变化，本次采集已停止。',
   request_timeout: '评价请求超时，已保留此前读取的内容。',
@@ -115,7 +118,7 @@ export const REVIEW_MESSAGES = {
   count_mismatch: '已到列表末页，但实读数量与该范围总数不一致。',
 };
 export const safeReason = code => Object.hasOwn(REVIEW_MESSAGES, code) ? code : 'transport_failed';
-export const blockedReason = code => ['sdk_requires_ui', 'login_required', 'verification_required', 'rate_limited'].includes(code);
+export const blockedReason = code => ['sdk_requires_ui', 'login_required', 'verification_required', 'verification_cancelled', 'verification_timeout', 'access_denied', 'rate_limited'].includes(code);
 export function unavailableReviews(itemId, reason = 'transport_failed') {
   reason = safeReason(reason);
   return { schemaVersion: 1, itemId, status: blockedReason(reason) ? 'blocked' : 'unavailable',

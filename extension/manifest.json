@@ -1,11 +1,11 @@
 {
   "manifest_version": 3,
   "name": "淘啊竞品采集器",
-  "version": "1.3.6",
-  "version_name": "V1.3.6 评价批次等待 10 秒",
+  "version": "1.3.8",
+  "version_name": "V1.3.8 多类目参数与店铺指标",
   "minimum_chrome_version": "109",
-  "options_page": "api-settings.html",
-  "optional_host_permissions": ["https://*/*"],
+  "options_page": "listing-diagnostics.html",
+  "devtools_page": "load-devtools.html",
   "description": "由用户主动触发，在后台读取淘宝/天猫商品页公开信息并发送到淘啊竞品分析工作台。",
   "permissions": ["activeTab", "tabs", "storage", "webNavigation", "downloads", "offscreen", "scripting", "alarms"],
   "host_permissions": [
@@ -45,7 +45,7 @@
         "https://*.taobao.com/*",
         "https://desc.alicdn.com/*"
       ],
-      "js": ["collector.js"],
+      "js": ["product-facts-runtime.js", "collector.js"],
       "run_at": "document_idle",
       "all_frames": true,
       "match_about_blank": true,

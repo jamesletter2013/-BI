@@ -1,6 +1,7 @@
 // Serialized into the product document's MAIN world. Keep self-contained.
-// Use its native SDK/session: never read cookies, copy signatures or open UI.
-export async function reviewPageRequest(itemId, descriptor = null, contextId = '') {
+// Use its native SDK/session; only an explicit handoff can show native validation.
+// Never read cookies, copy signatures, click or solve a challenge.
+export async function reviewPageRequest(itemId, descriptor = null, contextId = '', allowVerification = false) {
   const bad = code => ({ ok: false, code });
   const id = v => (typeof v === 'string' && /^[1-9]\d{0,31}$/.test(v)) || (Number.isSafeInteger(v) && v > 0);
   const samePage = () => {
@@ -14,10 +15,23 @@ export async function reviewPageRequest(itemId, descriptor = null, contextId = '
     return String(info.userId);
   };
   const failure = raw => {
-    const code = Array.isArray(raw?.ret) ? raw.ret.filter(v => typeof v === 'string').join(',') : '';
+    const code = Array.isArray(raw?.ret) ? raw.ret.filter(v => typeof v === 'string').map(v => v.split('::')[0]).join(',') : '';
+    if (/USER_INPUT_CANCEL/.test(code)) return bad('verification_cancelled');
+    if (/USER_INPUT_FAILURE/.test(code)) return bad('verification_required');
     if (/SESSION_EXPIRED|SID_INVALID|AUTH_REJECT|NEED_LOGIN|NOT_LOGIN|TOKEN_EMPTY|TOKEN_EXPIRED/.test(code)) return bad('login_required');
-    if (/VALIDATE|RGV587|ASSIST_FLAG|ANTI|ILLEGAL_ACCESS|ACCESS_DENIED|USER_VALIDATE/.test(code)) return bad('verification_required');
     if (/LIMIT|FREQUENT|TRAFFIC/.test(code)) return bad('rate_limited');
+    if (/ILLEGAL_ACCESS|ACCESS_DENIED/.test(code)) return bad('access_denied');
+    if (/VALIDATE|RGV587|ASSIST_FLAG|USER_VALIDATE/.test(code)) {
+      let canOpenVerification = false;
+      try {
+        const url = new URL(raw?.data?.url);
+        canOpenVerification = /RGV587|ASSIST_FLAG/.test(code) && url.protocol === 'https:' && !url.username && !url.password
+          && ['taobao.com', 'tmall.com'].some(d => url.hostname === d || url.hostname.endsWith('.' + d))
+          && typeof window.lib?.mtop?.antiCreepRequest === 'function';
+      } catch {}
+      return { ...bad('verification_required'), canOpenVerification };
+    }
+    if (/ANTI/.test(code)) return bad('access_denied');
     return bad('upstream_unsuccessful');
   };
   try {
@@ -29,7 +43,7 @@ export async function reviewPageRequest(itemId, descriptor = null, contextId = '
     // account identifier to the extension. Expired contexts are bounded/removed.
     const contexts = window.__TAOA_REVIEW_CONTEXTS__ ||= new Map();
     for (const [key, value] of contexts) if (Date.now() - value.started > 86400000) contexts.delete(key);
-    if (descriptor === null) contexts.set(contextId, { account, itemId, started: Date.now(), filters: [] });
+    if (descriptor === null && !contexts.has(contextId)) contexts.set(contextId, { account, itemId, started: Date.now(), filters: [] });
     const context = contexts.get(contextId);
     if (!context || context.itemId !== itemId) return bad('document_changed');
     if (context.account !== account) return bad('account_changed');
@@ -106,12 +120,14 @@ export async function reviewPageRequest(itemId, descriptor = null, contextId = '
       const finish = value => { if (!settled) { settled = true; clearTimeout(timer); resolve(value); } };
       const success = raw => { if (!settled) { try { finish(minimize(raw)); } catch { finish(bad('invalid_response_shape')); } } };
       const reject = raw => finish(failure(raw));
-      timer = setTimeout(() => finish(bad('request_timeout')), 22000);
+      timer = setTimeout(() => finish(bad(allowVerification ? 'verification_timeout' : 'request_timeout')), allowVerification ? 120000 : 22000);
       try {
         const returned = sdk.request({ api: descriptor.api, v: descriptor.version, data,
           appKey: '12574478', type: 'GET', dataType: 'jsonp', valueType: 'string', ecode: 1, timeout: 20000,
           H5Request: true, WindVaneRequest: false, LoginRequest: false, needLogin: false,
-          AntiCreep: false, AntiFlood: false, AntiFlool: false }, success, reject);
+          // The platform's dialog receives human input; success is still parsed
+          // and bound to this product/account before the cursor can advance.
+          AntiCreep: allowVerification === true, AntiFlood: false, AntiFlool: false }, success, reject);
         if (returned && typeof returned.then === 'function') returned.then(success, reject);
       } catch { finish(bad('transport_failed')); }
     });

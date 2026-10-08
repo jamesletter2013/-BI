@@ -1,0 +1,7 @@
+select { min-width: 0; max-width: 100%; flex: 1; }
+.actions { flex-wrap: wrap; }
+button:disabled { opacity: .5; cursor: not-allowed; }
+dl { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 12px; }
+dt { color: #77665f; } dd { margin: 0; overflow-wrap: anywhere; }
+pre { max-height: 380px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; background: #fff7f2; padding: 12px; border-radius: 10px; }
+[hidden] { display: none !important; }

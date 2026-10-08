@@ -556,12 +556,6 @@
     return found;
   }
 
-  function validTitle(value) {
-    const text = clean(value, 300);
-    if (text.length < 6 || /用户评价|商品评价|累计评价|客服|店铺优惠|平台补贴|开通88VIP|全网货源/i.test(text)) return '';
-    return text.replace(/[-_｜|]\s*(淘宝网|天猫.*)$/i, '').trim();
-  }
-
   function extractPrice(value) {
     const text = clean(value, 160);
     if (!text) return '';
@@ -569,11 +563,6 @@
     const plain = text.match(/^\s*(\d{1,7}(?:\.\d{1,2})?)\s*$/)?.[1];
     const price = marked[0] || plain || '';
     return price ? `¥${price}` : '';
-  }
-
-  function extractShop(value) {
-    const text = clean(value, 200);
-    return text.match(/[\u4e00-\u9fa5A-Za-z0-9·（）()_-]{2,32}(?:旗舰店|专卖店|专营店|企业店|工厂店|官方店)/)?.[0] || '';
   }
 
   function metricFromPage(rawPageText, patterns, scriptKeys, max = 60) {
@@ -602,35 +591,10 @@
         new RegExp(`(?:累计评价|商品评价|用户评价|评价数量|评价)\\s*[（(]?\\s*[+:：]?\\s*${quantity}`, 'i'),
         new RegExp(`${quantity}\\s*条评价`, 'i'),
       ], ['reviewCount', 'commentCount', 'rateTotal', 'totalReviewCount']),
-      shopRating: metricFromPage(rawPageText, [
-        /(?:店铺评分|综合体验|宝贝描述|描述相符)\s*[:：]?\s*([0-5](?:\.[0-9]{1,2})?)/i,
-      ], ['shopScore', 'dsrScore', 'descriptionMatchScore']),
       positiveRate: metricFromPage(rawPageText, [
         /(?:好评率|好评)\s*[:：]?\s*([0-9]+(?:\.[0-9]+)?%)/i,
       ], ['positiveRate', 'goodRate', 'goodRatePercentage']),
-      serviceScore: metricFromPage(rawPageText, [
-        /(?:客服满意度|客服服务|服务体验|卖家服务|服务态度)\s*[:：]?\s*([0-9]+(?:\.[0-9]+)?%|[0-5](?:\.[0-9]{1,2})?)/i,
-      ], ['serviceScore', 'serviceRating', 'sellerServiceScore']),
     };
-  }
-
-  function attributePairsFromLines(rawPageText) {
-    const labels = '品牌|型号|材质|风格|形状|产地|颜色分类|适用场景|工艺|尺寸|容量|是否手工|包装种类|餐具类型|图案|货号|适用人群|适用对象';
-    const sameLine = new RegExp(`^(${labels})\\s*(?:[:：|｜]\\s*|\\s+)(.{1,80})$`);
-    const labelOnly = new RegExp(`^(${labels})\\s*[:：|｜]?$`);
-    const lines = String(rawPageText || '').split(/\n+/).map((line) => clean(line, 120)).filter(Boolean);
-    const pairs = [];
-    for (let index = 0; index < lines.length; index += 1) {
-      const same = lines[index].match(sameLine);
-      if (same?.[1] && same?.[2]) {
-        pairs.push(`${same[1]}：${same[2]}`);
-        continue;
-      }
-      const label = lines[index].match(labelOnly)?.[1];
-      const value = lines[index + 1];
-      if (label && value && value.length <= 80 && !labelOnly.test(value)) pairs.push(`${label}：${value}`);
-    }
-    return unique(pairs, 100);
   }
 
   function parseIds() {
@@ -641,7 +605,8 @@
     return { itemId, skuId };
   }
 
-  function collectPage(collectedSkuImages = []) {
+  function collectPage(collectedSkuImages = [], shopInfo = {}) {
+    const shopMetrics = shopInfo.shopMetrics || [];
     const rawPageText = document.body?.innerText || '';
     const pageText = clean(rawPageText, 18000);
     const blocked = /访问被拒绝|当前访问存在风险|安全验证|滑动验证|请完成验证|punish/i.test(
@@ -649,13 +614,7 @@
     );
 
     const product = structuredProducts()[0] || {};
-    const titleCandidates = [
-      product.name,
-      firstText(['meta[property="og:title"]']),
-      firstText(['[class*="ItemTitle"]', '[class*="Title--"]', '.tb-detail-hd h1', '[data-testid="item-title"]']),
-      document.title,
-    ];
-    const title = titleCandidates.map(validTitle).find(Boolean) || '';
+    const title = TAOAFACTS.collectProductTitle(document, product);
 
     const offer = Array.isArray(product.offers) ? product.offers[0] : product.offers;
     const priceCandidates = [
@@ -666,14 +625,7 @@
     ];
     const price = priceCandidates.map(extractPrice).find(Boolean) || '';
 
-    const shopRaw = firstText([
-      '[class*="ShopHeader"] [class*="name"]',
-      '[class*="ShopInfo"] [class*="name"]',
-      '[class*="shopName"]',
-      '[class*="shop-name"]',
-      'a[href*="shop"]',
-    ], 200);
-    const shop = extractShop(shopRaw) || extractShop(pageText) || '';
+    const shop = shopInfo.shop || TAOAFACTS.collectShopName(document);
 
     const primaryImages = imagesFrom([
       '[class*="PicGallery"] img',
@@ -707,23 +659,8 @@
       '[class*="sku"] span',
     ], 100, 60).filter((text) => text.length >= 1 && text.length <= 40 && !/优惠|评价|客服|收藏|销量|发货|运费/.test(text));
 
-    const attributes = unique([...collectTextItems([
-      '[class*="Attribute"] li',
-      '[class*="attribute"] li',
-      '[class*="Params"] li',
-      '[class*="params"] li',
-      '[class*="Parameter"] li',
-      '[class*="parameter"] li',
-      '[class*="Property"] li',
-      '[class*="property"] li',
-      '[class*="Props"] li',
-      '[class*="props"] li',
-      '[class*="BasicContent"] li',
-      '[class*="ItemParams"] li',
-      '[data-testid*="parameter"]',
-      '[class*="Attribute"] tr',
-      '[class*="params"] tr',
-    ], 100, 160).filter((text) => /[:：]/.test(text) && text.length <= 100), ...attributePairsFromLines(rawPageText)], 100);
+    const parameters = TAOAFACTS.collectProductParameters(document);
+    const attributes = parameters.map(row => `${row.name}：${row.value}`);
 
     const { itemId, skuId } = parseIds();
     const metrics = collectMetrics(rawPageText);
@@ -736,6 +673,9 @@
       shop,
       price: clean(price, 80),
       ...metrics,
+      shopMetrics,
+      shopRating: shopMetrics.find(row => /^(综合体验|店铺评分)$/.test(row.name))?.value || '',
+      serviceScore: shopMetrics.find(row => row.name === '客服满意度')?.value || '',
       itemId,
       skuId,
       mainImages,
@@ -743,6 +683,9 @@
       detailImages,
       skuOptions,
       attributes,
+      parameters,
+      ...TAOAFACTS.collectListingInfo(document, product, parameters),
+      parameterSchemaVersion: 1,
       pageText,
       capturedAt: new Date().toISOString(),
       message: blocked ? '页面要求验证或拒绝访问，采集已停止。' : '',
@@ -756,7 +699,7 @@
     if (message?.type !== 'TAOA_CAPTURE_NOW') return false;
     warmLazyDetails()
       .then(() => collectSkuImagesBySelection())
-      .then((skuImages) => sendResponse({ ok: true, capture: collectPage(skuImages) }))
+      .then(async (skuImages) => sendResponse({ ok: true, capture: collectPage(skuImages, await TAOAFACTS.readShopInfo(document)) }))
       .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
     return true;
   });

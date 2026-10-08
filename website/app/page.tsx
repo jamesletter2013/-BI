@@ -9,20 +9,29 @@ import { ProductParameters } from '@/components/product-parameters';
 import { ReviewsPanel } from '@/components/reviews-panel';
 import { ProductDetails } from '@/components/product-details';
 import { OpportunityPanel, type OpportunityPanelHandle } from '@/components/opportunity-panel';
+import { hostAIAdapter } from '@/lib/host-ai-adapter';
 import { hasAnalysisData, pushScopeLabels, type AnalysisInput, type ReviewPushScope } from '@/lib/analysis-packet';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { validateReviews, type ReviewsCapture } from '@/lib/reviews';
 import { requestSavedReviews } from '@/lib/review-export';
 import { validateQuestions, type QuestionsCapture } from '@/lib/questions';
 
+import { normalizeParameters, normalizeShopMetrics, type ProductParameter } from '@/lib/product-parameters';
+
 const initialUrl = '';
 type CaptureStatus = 'success' | 'blocked' | 'failed';
-type ProductCapture = { reviewData:ReviewsCapture|null; qa:QuestionsCapture|null; schemaVersion:number; status:CaptureStatus; sourceUrl:string; finalUrl:string; title:string; shop:string; price:string; sales:string; reviewCount:string; shopRating:string; positiveRate:string; serviceScore:string; itemId:string; skuId:string; mainImages:string[]; skuImages:string[]; detailImages:string[]; skuOptions:string[]; attributes:string[]; pageText:string; capturedAt:string; message:string };
+type ProductCapture = {
+  categoryPath?:string; categorySource?:string; listedAt?:string; listedAtSource?:string;
+  parameters?:ProductParameter[]; shopMetrics?:ProductParameter[]; reviewData:ReviewsCapture|null; qa:QuestionsCapture|null;
+  schemaVersion:number; status:CaptureStatus; sourceUrl:string; finalUrl:string; title:string; shop:string; price:string;
+  sales:string; reviewCount:string; shopRating:string; positiveRate:string; serviceScore:string; itemId:string; skuId:string;
+  mainImages:string[]; skuImages:string[]; detailImages:string[]; skuOptions:string[]; attributes:string[]; pageText:string; capturedAt:string; message:string;
+};
 type ModelContextApi = { registerTool:(tool:{name:string;title:string;description:string;inputSchema:object;annotations:{readOnlyHint:boolean;untrustedContentHint:boolean};execute:(input:unknown)=>unknown}, options?:{signal?:AbortSignal})=>void|Promise<void> };
 const blankCapture:ProductCapture = { reviewData:null,qa:null,schemaVersion:3,status:'failed',sourceUrl:'',finalUrl:'',title:'',shop:'',price:'',sales:'',reviewCount:'',shopRating:'',positiveRate:'',serviceScore:'',itemId:'',skuId:'',mainImages:[],skuImages:[],detailImages:[],skuOptions:[],attributes:[],pageText:'',capturedAt:'',message:'' };
 const cleanString=(v:unknown,max=1000)=>typeof v==='string'?v.replace(/\s+/g,' ').trim().slice(0,max):'';
 function cleanList(v:unknown,maxItems:number,maxLength:number,urls=false){if(!Array.isArray(v))return [];return [...new Set(v.map(x=>cleanString(x,maxLength)).filter(x=>x&&(!urls||/^https?:\/\//i.test(x))))].slice(0,maxItems)}
-function validateCapture(value:unknown):ProductCapture|null{if(!value||typeof value!=='object')return null;const x=value as Record<string,unknown>;const status=['success','blocked','failed'].includes(String(x.status))?x.status as CaptureStatus:'failed';return {reviewData:validateReviews(x.reviewData,cleanString(x.itemId,40)),qa:validateQuestions(x.qa),schemaVersion:Number(x.schemaVersion)||1,status,sourceUrl:cleanString(x.sourceUrl,3000),finalUrl:cleanString(x.finalUrl,3000),title:cleanString(x.title,300),shop:cleanString(x.shop,160),price:cleanString(x.price,80),sales:cleanString(x.sales,60),reviewCount:cleanString(x.reviewCount,60),shopRating:cleanString(x.shopRating,60),positiveRate:cleanString(x.positiveRate,60),serviceScore:cleanString(x.serviceScore,60),itemId:cleanString(x.itemId,40),skuId:cleanString(x.skuId,40),mainImages:cleanList(x.mainImages,12,3000,true),skuImages:cleanList(x.skuImages,80,3000,true),detailImages:cleanList(x.detailImages,120,3000,true),skuOptions:cleanList(x.skuOptions,100,80),attributes:cleanList(x.attributes,100,200),pageText:cleanString(x.pageText,18000),capturedAt:cleanString(x.capturedAt,80),message:cleanString(x.message,300)}}
+function validateCapture(value:unknown):ProductCapture|null{if(!value||typeof value!=='object')return null;const x=value as Record<string,unknown>;const status=['success','blocked','failed'].includes(String(x.status))?x.status as CaptureStatus:'failed';return {categoryPath:cleanString(x.categoryPath,500),categorySource:cleanString(x.categorySource,120),listedAt:cleanString(x.listedAt,40),listedAtSource:cleanString(x.listedAtSource,120),parameters:Array.isArray(x.parameters)?normalizeParameters(x.parameters):undefined,shopMetrics:normalizeShopMetrics(x.shopMetrics),reviewData:validateReviews(x.reviewData,cleanString(x.itemId,40)),qa:validateQuestions(x.qa),schemaVersion:Number(x.schemaVersion)||1,status,sourceUrl:cleanString(x.sourceUrl,3000),finalUrl:cleanString(x.finalUrl,3000),title:typeof x.title==='string'?x.title.replace(/[\t\r\n]+/g,' ').trim().slice(0,300):'',shop:cleanString(x.shop,160),price:cleanString(x.price,80),sales:cleanString(x.sales,60),reviewCount:cleanString(x.reviewCount,60),shopRating:cleanString(x.shopRating,60),positiveRate:cleanString(x.positiveRate,60),serviceScore:normalizeShopMetrics(x.shopMetrics).find(row=>row.name==='客服满意度')?.value||'',itemId:cleanString(x.itemId,40),skuId:cleanString(x.skuId,40),mainImages:cleanList(x.mainImages,12,3000,true),skuImages:cleanList(x.skuImages,80,3000,true),detailImages:cleanList(x.detailImages,120,3000,true),skuOptions:cleanList(x.skuOptions,100,80),attributes:cleanList(x.attributes,100,200),pageText:cleanString(x.pageText,18000),capturedAt:cleanString(x.capturedAt,80),message:cleanString(x.message,300)}}
 function idsFromUrl(value:string){try{const p=new URL(value);return {itemId:p.searchParams.get('id')||'',skuId:p.searchParams.get('skuId')||''}}catch{return {itemId:'',skuId:''}}}
 function isProductUrl(value:string){return /^https:\/\/[^/]*(taobao|tmall)\.com\//i.test(value)}
 export default function Home(){
@@ -55,8 +64,9 @@ export default function Home(){
   const productFresh=!checking&&questionsFresh&&(!liveReviews?.itemId||liveReviews.itemId===data.itemId);
   const analysisItem=liveReviews?.itemId||(productFresh?data.itemId:activeItem.current)||'';
   const analysisInput:AnalysisInput={itemId:analysisItem,title:productFresh?data.title:'',price:productFresh?data.price:'',capturedAt:productFresh?data.capturedAt:'',
+    categoryPath:productFresh?data.categoryPath:'',categorySource:productFresh?data.categorySource:'',listedAt:productFresh?data.listedAt:'',listedAtSource:productFresh?data.listedAtSource:'',
     sourceUrl:productFresh?data.sourceUrl:'',shop:productFresh?data.shop:'',sales:productFresh?sales:'',reviewCount:productFresh?reviews:'',shopRating:productFresh?rating:'',positiveRate:productFresh?data.positiveRate:'',serviceScore:productFresh?data.serviceScore:'',
-    attributes:productFresh?data.attributes:[],pageText:productFresh?data.pageText:'',mainImages:productFresh?data.mainImages:[],skuImages:productFresh?data.skuImages:[],detailImages:productFresh?data.detailImages:[],skuOptions:productFresh?data.skuOptions:[],
+    parameters:productFresh?data.parameters:[],shopMetrics:productFresh?data.shopMetrics:[],attributes:productFresh?data.attributes:[],pageText:productFresh?data.pageText:'',mainImages:productFresh?data.mainImages:[],skuImages:productFresh?data.skuImages:[],detailImages:productFresh?data.detailImages:[],skuOptions:productFresh?data.skuOptions:[],
     note,reviewData:liveReviews,qa:liveQa,collecting:checking};
   useEffect(()=>{setReviewPushScope('bad');setNote('')},[analysisItem]);
   // Read only the extension's saved checkpoint if a pushed update was missed.
@@ -124,10 +134,10 @@ export default function Home(){
         <ProductDetails images={data.detailImages} onDownload={()=>downloadImages(data.detailImages,'detail')} onPreview={(src,label)=>setPreview({src,label})}/>
       </div>
       <div className="grid min-w-0 content-start gap-4">
-        <ProductParameters attributes={data.attributes} pageText={data.pageText} checking={checking}/>
+        <ProductParameters attributes={data.attributes} parameters={data.parameters} pageText={data.pageText} checking={checking}/>
         <QuestionsPanel key={liveReviews?.itemId||data.itemId} itemId={data.itemId} qa={liveQa} reviewData={liveReviews} checking={checking} onControl={controlCollection}/>
       </div>
-      <OpportunityPanel ref={discussion} key={analysisItem||'empty'} input={analysisInput} reviewScope={reviewPushScope}/>
+      <OpportunityPanel ref={discussion} key={analysisItem||'empty'} input={analysisInput} reviewScope={reviewPushScope} hostAI={hostAIAdapter}/>
     </div>{preview&&<div role="dialog" aria-modal="true" aria-label={preview.label} className="fixed inset-0 z-50 grid place-items-center bg-slate-950/85 p-4" onClick={()=>setPreview(null)}><button type="button" onClick={()=>setPreview(null)} aria-label="关闭大图" className="absolute right-5 top-5 grid size-10 place-items-center rounded-full bg-white/15 text-white hover:bg-white/25"><X className="size-5"/></button><div className="flex max-h-[94vh] max-w-[94vw] flex-col items-center" onClick={e=>e.stopPropagation()}><img src={preview.src} alt={preview.label} className="max-h-[88vh] max-w-[94vw] object-contain" referrerPolicy="no-referrer"/><p className="mt-3 rounded-full bg-black/40 px-3 py-1 text-sm text-white">{preview.label}</p></div></div>}{notice&&<p role="status" className="fixed bottom-4 left-1/2 z-30 -translate-x-1/2 rounded-full bg-slate-900 px-4 py-2 text-sm text-white shadow-lg">{notice}</p>}<footer className="mt-4 flex justify-between px-1 text-sm text-muted-foreground"><span>数据仅保存在当前浏览器与本地扩展</span><a href={url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-primary">查看原商品链接 <ExternalLink className="size-3"/></a></footer>
   </div></main>
 }

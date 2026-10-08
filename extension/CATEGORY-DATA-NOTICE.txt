@@ -1,0 +1,25 @@
+Local category reference data / 本地类目参考数据
+
+Source repository: https://github.com/wsteel/taobao_itemcats
+Source file: taobao_itemcats.txt
+Source-stated update: 2020-07-27
+Git blob: ed481fb56d34de62e5f8f1390ed526561cf0a278
+SHA-256 of original UTF-8 data:
+625c502b60a580aa79454e1c868940ff4441e648261f6a82f7b388273de7ad20
+Original bytes: 1625938
+Data rows: 42828 (5231 parent records, 37597 leaf records)
+
+The packaged JSON mechanically retains numeric category ID, parent ID, name and
+parent flag. The runtime is generated from our local resolver and that JSON.
+No upstream executable code is used. No request to this repository or any
+third-party query service is made during collection.
+
+This is an attributed public historical factual reference, not a current official
+Taobao/Tmall category list, an official affiliation, or a verified 2026 snapshot.
+No explicit upstream license was found; this notice does not grant upstream rights
+or make a licensing claim. Review data provenance and usage before redistribution.
+
+Names and hierarchies may have changed since the source date. Page-provided current
+names take precedence. Dictionary-filled values visibly carry their reference date.
+Missing IDs, conflicting IDs/names and incomplete chains must not be guessed from
+product titles or replaced with an unrelated category.

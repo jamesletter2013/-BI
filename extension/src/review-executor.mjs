@@ -1,6 +1,6 @@
 import { reviewPageRequest } from './review-page-request.mjs';
 import { runReviewFlow, captureFromCheckpoint, validCheckpoint } from './review-flow.mjs';
-import { safeReason, unavailableReviews } from './review-model.mjs';
+import { REVIEW_LIMITS, safeReason, unavailableReviews } from './review-model.mjs';
 export { unavailableReviews } from './review-model.mjs';
 const inflight = new Map();
 const fail = code => { throw Object.assign(new Error(code), { code }); };
@@ -59,22 +59,51 @@ async function collect(tab, itemId, browser, options) {
       if (!bound && round < 2) await new Promise(r => setTimeout(r, 750));
     }
     if (!bound) fail(lastCode);
-    let lastRequest = 0;
+    const started = Date.now();
+    let lastFinished = null;
     const send = async descriptor => {
-      const wait = 600 - (Date.now() - lastRequest);
+      // Fixed pacing after completion, not a burst or randomized human disguise.
+      const wait = lastFinished === null ? 0 : 3000 - (Date.now() - lastFinished);
       if (wait > 0) await new Promise(r => setTimeout(r, wait));
+      if (options.shouldStop?.()) fail('manual_paused');
+      if (Date.now() - started >= (options.limits?.elapsedMs ?? REVIEW_LIMITS.elapsedMs)) fail('batch_limit');
       let live;
       try { live = await browser.tabs.get(bound.tabId); } catch { fail('document_changed'); }
       if (productId(live.url) !== itemId) fail('product_mismatch');
-      lastRequest = Date.now();
       let entries;
       try { entries = await bounded(browser.scripting.executeScript({
         target: { tabId: bound.tabId, documentIds: [bound.documentId] }, world: 'MAIN',
         func: reviewPageRequest, args: [itemId, descriptor, contextId] }), 24000); }
       catch (e) { fail(['request_timeout', 'capture_stopped'].includes(e?.code) ? e.code : 'document_changed'); }
-      const entry = entries.find(x => x.documentId === bound.documentId && x.frameId === 0);
+      let entry = entries.find(x => x.documentId === bound.documentId && x.frameId === 0);
       if (!entry) fail('document_changed');
+      if (entry.result?.code === 'verification_required' && entry.result.canOpenVerification === true
+        && options.allowInteractiveVerification === true && !options.shouldStop?.()) {
+        // One native human-verification handoff for this page; no retry loop.
+        let watch, pulses = 0;
+        try {
+          await options.onVerification?.(true);
+          if (options.shouldStop?.()) fail('manual_paused');
+          await browser.tabs.update(bound.tabId, { active: true });
+          if (browser.windows?.update && Number.isInteger(live.windowId)) await browser.windows.update(live.windowId, { focused: true });
+          if (options.shouldStop?.()) fail('manual_paused');
+          const stopped = new Promise((_, reject) => {
+            watch = setInterval(() => {
+              if (options.shouldStop?.()) reject(Object.assign(new Error('manual_paused'), { code: 'manual_paused' }));
+              if (++pulses % 10 === 0) browser.tabs.get(bound.tabId).catch(() => reject(Object.assign(new Error('document_changed'), { code: 'document_changed' })));
+            }, 1000);
+          });
+          entries = await Promise.race([bounded(browser.scripting.executeScript({
+            target: { tabId: bound.tabId, documentIds: [bound.documentId] }, world: 'MAIN',
+            func: reviewPageRequest, args: [itemId, descriptor, contextId, true] }), 130000), stopped]);
+          entry = entries.find(x => x.documentId === bound.documentId && x.frameId === 0);
+          if (!entry) fail('document_changed');
+        } catch (error) { fail(safeReason(error?.code)); }
+        finally { clearInterval(watch); await options.onVerification?.(false); }
+      }
       if (!entry.result?.ok) fail(safeReason(entry?.result?.code));
+      if (options.shouldStop?.()) fail('manual_paused');
+      lastFinished = Date.now();
       return entry.result.source;
     };
     const result = await runReviewFlow({ itemId, ...options, refreshCapabilities: freshBinding && options.checkpoint?.scopeIndex > 0,

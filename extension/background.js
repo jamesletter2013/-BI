@@ -2,8 +2,9 @@ importScripts('qa-runtime.js');
 importScripts('reviews-runtime.js');
 importScripts('feedback-runtime.js');
 importScripts('review-jobs-runtime.js');
-importScripts('api-core.js', 'api-profiles.js', 'api-background.js');
 importScripts('capture-tabs.js');
+importScripts('listing-facts-runtime.js');
+importScripts('category-runtime.js');
 const WORKBENCH_URL = 'https://taoa-competitor-lab.jamesletter2013.chatgpt.site/';
 const reviewJobs = TAOAJOBS.createReviewJobs({ publish: publishReviewProgress, allowInteractiveVerification: true });
 const reviewRecovery = reviewJobs.recover().catch(() => undefined);
@@ -744,7 +745,7 @@ async function collectFromTab(tabId) {
           // The collector's guard keeps injection idempotent in connected tabs.
           await chrome.scripting.executeScript({
             target: { tabId, frameIds: [frame.frameId] },
-            files: ['collector.js'],
+            files: ['product-facts-runtime.js', 'collector.js'],
           });
           const response = await chrome.tabs.sendMessage(tabId, { type: 'TAOA_CAPTURE_NOW' }, { frameId: frame.frameId });
           return response?.ok && response.capture ? { frameId: frame.frameId, capture: response.capture } : null;
@@ -769,7 +770,23 @@ async function collectFromTab(tabId) {
     const pageWorldSkuImages = pageWorldSkuResult.images;
     const captures = results.filter(Boolean);
     if (!captures.length) throw new Error('页面内容未准备好。');
-    const top = captures.find((item) => item.frameId === 0)?.capture || captures[0].capture;
+    const topCapture = captures.find((item) => item.frameId === 0)?.capture || captures[0].capture;
+    // Optional page-local enrichment; no external query or raw page state.
+    let top = topCapture;
+    if (captures.some(item => item.frameId === 0) && topCapture.status === 'success' && topCapture.itemId === qaProductId(tab.url || '')) {
+      try {
+        const facts = await chrome.scripting.executeScript({
+          target: { tabId, frameIds: [0] }, world: 'MAIN',
+          func: TAOALISTING.readPageListingFacts, args: [topCapture.itemId],
+        });
+        const current = await chrome.tabs.get(tabId);
+        if (qaProductId(current.url || '') === topCapture.itemId) {
+          const snapshot = facts.find(item => item.frameId === 0)?.result;
+          top = TAOALISTING.mergeListingFacts(topCapture, snapshot, topCapture.itemId);
+          top = TAOACATEGORY.enrichCategory(top, snapshot, topCapture.itemId);
+        }
+      } catch { /* Optional enrichment must not break the existing capture. */ }
+    }
     const domSkuImages = captures.flatMap((item) => item.capture.skuImages || []);
     const frameDetailImages = captures.flatMap((item) => {
       if (item.frameId === 0) return item.capture.detailImages || [];
@@ -839,6 +856,9 @@ async function collectFromTab(tabId) {
       shopRating: top.shopRating || captures.find((item) => item.capture.shopRating)?.capture.shopRating || '',
       positiveRate: top.positiveRate || captures.find((item) => item.capture.positiveRate)?.capture.positiveRate || '',
       serviceScore: top.serviceScore || captures.find((item) => item.capture.serviceScore)?.capture.serviceScore || '',
+      shopMetrics: top.shopMetrics || [],
+      parameters: top.parameters || [],
+      parameterSchemaVersion: top.parameterSchemaVersion || 1,
       mainImages: mergeUnique(top.mainImages || [], 12),
       // SKU controls may live in a separate same-origin frame. Keep all DOM
       // frame results so the main frame's single placeholder cannot hide the
@@ -846,7 +866,7 @@ async function collectFromTab(tabId) {
       skuImages,
       detailImages,
       skuOptions: [...new Set(captures.flatMap((item) => item.capture.skuOptions || []))].slice(0, 100),
-      attributes: [...new Set(captures.flatMap((item) => item.capture.attributes || []))].slice(0, 100),
+      attributes: top.attributes || [],
     };
   } catch (error) {
     const finalUrl = tab.url || '';

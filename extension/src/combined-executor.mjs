@@ -12,7 +12,8 @@ const stopLabels = {
 };
 const names = { qa: '问大家', reviews: '评价', capture: '联合采集' };
 
-// No second button, no new tab/session and no retry after an access challenge.
+// No new tab/session. Only a supported native human-verification handoff may
+// continue a challenged page; denied or failed requests are not retried.
 export function collectFeedbackInBackground(tab, itemId, browser = chrome, options = {}) {
   const key = `${tab.windowId}:${itemId}`;
   if (inflight.has(key)) return inflight.get(key);
@@ -30,7 +31,7 @@ async function collect(tab, itemId, browser, options) {
         const entries = await browser.scripting.executeScript(spec);
         const entry = entries.find(x => x.frameId === 0 && (!spec.target.documentIds
           || spec.target.documentIds.includes(x.documentId)));
-        const inlineVerification = source === 'qa' && options.qa?.allowInteractiveVerification === true
+        const inlineVerification = options[source]?.allowInteractiveVerification === true
           && entry?.result?.code === 'verification_required' && entry.result.canOpenVerification === true
           && spec.args?.[3] !== true;
         if (STOP_CODES.has(entry?.result?.code) && !inlineVerification) scheduler.halt(source, entry.result.code);
