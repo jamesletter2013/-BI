@@ -3,6 +3,7 @@
   const C = window.PriceCore, $ = id => document.getElementById(id);
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const initial = window.INITIAL_CATALOG?.records ?? C.SEED;
+  const bundleRevision = window.INITIAL_CATALOG?.bundleRevision || '';
   let records = initial.map(r => ({ ...r })), lookup = new Map(), filter = 'all', page = 1, updatedAt = '', db;
   let matrix = [], sheets = [], headerRow = 0, pendingImport = null, importName = '', toastTimer, inputTimer;
   let batchResults = [], batchTimer;
@@ -12,6 +13,7 @@
   const marginNumberFormat = new Intl.NumberFormat('zh-CN', { style: 'percent', minimumFractionDigits: 2, maximumFractionDigits: 2, useGrouping: false });
   const formatMargin = value => value == null ? '—' : marginNumberFormat.format(value);
   const marginHint = row => row.sale === null ? '缺少聚水潭卖价' : row.cost === null ? '缺少聚水潭成本' : row.sale === 0 ? '聚水潭卖价为 0，无法计算毛利' : `（${C.formatMoney(row.sale)} − ${formatCostDisplay(row.cost)}）÷ ${C.formatMoney(row.sale)}`;
+  const saleMarkup = row => `<span class="sale-value">${C.formatMoney(row.sale)}</span>${row.kind === 'bundle' ? `<small class="price-rule-note">${row.cost === null ? '组合装 · 待补成本' : '组合成本 ÷ 0.3'}</small>` : ''}`;
   function reductionMarkup(row, index) {
     if (row.difference === null) return '—';
     const amount = C.formatMoney(row.difference);
@@ -37,7 +39,24 @@
         const request = databaseRef.transaction('data', 'readonly').objectStore('data').get('catalog');
         request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
       });
-      if (saved) { if (!validRecords(saved.records)) throw new Error('已保存的数据格式异常'); records = saved.records; updatedAt = saved.updatedAt; }
+      if (saved) {
+        if (!validRecords(saved.records)) throw new Error('已保存的数据格式异常'); records = saved.records; updatedAt = saved.updatedAt;
+        if (bundleRevision && saved.bundleRevision !== bundleRevision) {
+          const authoritativeBundles = new Map(initial.filter(r => r.kind === 'bundle').map(r => [C.normalize(r.code), r]));
+          let reclassified = 0;
+          records = records.map(row => {
+            const bundle = authoritativeBundles.get(C.normalize(row.code));
+            if (!bundle || row.kind === 'bundle') return row;
+            reclassified++;
+            return { ...bundle, tmall: row.tmall ?? bundle.tmall, tmallSource: row.tmallSource || bundle.tmallSource };
+          });
+          const keys = new Set(records.map(r => C.normalize(r.code)));
+          const added = initial.filter(r => r.kind === 'bundle' && !keys.has(C.normalize(r.code)));
+          records = [...records, ...added];
+          await persist();
+          if (added.length || reclassified) toast(`已补入 ${added.length.toLocaleString()} 个组合编码${reclassified ? `，另识别 ${reclassified} 个已有组合编码` : ''}，保留本机普通商品资料`);
+        }
+      }
     } catch (e) { $('storage-state').textContent = '浏览器保存不可用，请导出备份'; toast('无法读取本机保存，已载入初始资料。'); }
   }
   async function persist() {
@@ -45,7 +64,7 @@
       const databaseRef = await database(); const date = new Date().toISOString();
       await new Promise((resolve, reject) => {
         const transaction = databaseRef.transaction('data', 'readwrite');
-        transaction.objectStore('data').put({ records, updatedAt: date }, 'catalog');
+        transaction.objectStore('data').put({ records, updatedAt: date, bundleRevision }, 'catalog');
         transaction.oncomplete = resolve; transaction.onerror = () => reject(transaction.error); transaction.onabort = () => reject(transaction.error);
       });
       updatedAt = date; $('storage-state').textContent = '更新已保存到当前浏览器'; return true;
@@ -57,7 +76,8 @@
     $('catalog-count').textContent = records.length.toLocaleString();
     $('all-count').textContent = records.length.toLocaleString(); $('ready-count').textContent = ready.toLocaleString(); $('missing-count').textContent = (records.length - ready).toLocaleString();
     $('source-title').textContent = `已载入 ${records.length.toLocaleString()} 个商品编码`;
-    $('source-description').textContent = !records.length ? '请先导入聚水潭商品资料；格式示例使用虚构编码' : updatedAt ? '包含本机补录及导入的价格' : '商品资料已载入，粘贴天猫价格即可计算';
+    const bundles = records.filter(r => r.kind === 'bundle'), missingBundleCosts = bundles.filter(r => r.cost == null).length;
+    $('source-description').textContent = !records.length ? '请先导入聚水潭商品资料' : `${(records.length - bundles.length).toLocaleString()} 个普通商品 · ${bundles.length.toLocaleString()} 个组合装${missingBundleCosts ? `（${missingBundleCosts} 个待补组合成本）` : ''}`;
     renderQuery(); renderTable(); calculateBatch();
   }
   function query(code, shouldScroll = false) {
@@ -70,10 +90,10 @@
     const record = lookup.get(code);
     if (!code) { $('query-result').innerHTML = '<div class="empty-result"><h3>输入编码开始查询</h3><p>先导入聚水潭商品资料，价格齐全后即可计算减钱。</p><button class="button secondary small" data-query="DEMO-SKU-001">试查 DEMO-SKU-001</button></div>'; return; }
     if (!record) { $('query-result').innerHTML = `<div class="empty-result"><h3>未找到这个商品编码</h3><p>请核对编码是否完整，或导入对应商品资料。<br><code>${esc($('sku-input').value.trim())}</code></p><button class="button secondary small" data-new="${esc($('sku-input').value.trim())}">补录这个商品</button></div>`; return; }
-    const diff = C.difference(record), missing = diff === null;
+    const pricing = C.resolvePricing(record), diff = C.difference(record), missing = diff === null;
     const source = record.productName ? `${record.productName} · ${record.name}` : record.name || '未填写规格';
     const pricePanel = (label, value, meta) => `<div class="price-panel"><div class="price-label">${label}</div><div class="price-number">${value === null ? '<span class="missing-value">待补价格</span>' : `<span class="currency">¥</span>${C.formatMoney(value)}`}</div><div class="price-meta" title="${esc(meta)}">${esc(meta || '尚未提供')}</div></div>`;
-    $('query-result').innerHTML = `<div class="result-section"><div class="result-heading"><div><p class="product-name">${esc(source)}</p><div class="product-code">${esc(record.code)}</div></div><span class="badge ${missing ? 'missing' : 'ready'}">${missing ? '价格待补充' : '编码匹配成功'}</span></div><div class="calculation">${pricePanel('天猫 SKU 一口价', record.tmall, record.tmallSource)}<div class="operator" aria-hidden="true">−</div>${pricePanel('聚水潭卖价', record.sale, record.jstSource)}<div class="operator" aria-hidden="true">＝</div><div class="price-panel difference-panel ${diff < 0 ? 'negative' : ''}"><div class="price-label">一口价 − 卖价</div><div class="price-number">${missing ? '<span style="font-size:22px">待补价格</span>' : `<span class="currency">¥</span>${C.formatMoney(diff)}`}</div><div class="price-meta">${missing ? (record.tmall === null ? '补录天猫一口价后即可计算' : '补录聚水潭卖价后即可计算') : diff < 0 ? '一口价低于聚水潭卖价' : '减钱 / 件'}</div></div></div><div class="result-actions"><span>${missing ? '同一编码的两项价格填写完整后自动计算。' : `${C.formatMoney(record.tmall)} − ${C.formatMoney(record.sale)} = ${C.formatMoney(diff)} 元`}</span><button class="text-button" data-edit="${esc(record.code)}">${record.tmall === null ? '补录天猫一口价' : '修改价格'}</button></div></div>`;
+    $('query-result').innerHTML = `<div class="result-section"><div class="result-heading"><div><p class="product-name">${esc(source)}</p><div class="product-code">${esc(record.code)}${pricing.kind === 'bundle' ? ' · 组合装' : ''}</div></div><span class="badge ${missing ? 'missing' : 'ready'}">${missing ? '价格待补充' : '编码匹配成功'}</span></div><div class="calculation">${pricePanel('天猫 SKU 一口价', record.tmall, record.tmallSource)}<div class="operator" aria-hidden="true">−</div>${pricePanel('聚水潭卖价', pricing.sale, pricing.source)}<div class="operator" aria-hidden="true">＝</div><div class="price-panel difference-panel ${diff < 0 ? 'negative' : ''}"><div class="price-label">一口价 − 卖价</div><div class="price-number">${missing ? '<span style="font-size:22px">待补价格</span>' : `<span class="currency">¥</span>${C.formatMoney(diff)}`}</div><div class="price-meta">${missing ? (pricing.issue || '补录天猫一口价后即可计算') : diff < 0 ? '一口价低于聚水潭卖价' : '减钱 / 件'}</div></div></div><div class="result-actions"><span>${missing ? (pricing.issue || '同一编码的两项价格填写完整后自动计算。') : `${C.formatMoney(record.tmall)} − ${C.formatMoney(pricing.sale)} = ${C.formatMoney(diff)} 元`}</span><button class="text-button" data-edit="${esc(record.code)}">${pricing.kind === 'bundle' && pricing.cost === null ? '补录组合成本' : record.tmall === null ? '补录天猫一口价' : '修改价格'}</button></div></div>`;
   }
   function suggestions() {
     const key = C.normalize($('sku-input').value), box = $('suggestions');
@@ -88,7 +108,7 @@
     const size = 20, pages = Math.max(1, Math.ceil(list.length / size)); page = Math.min(page, pages);
     const slice = list.slice((page - 1) * size, page * size);
     const priceCell = value => value === null ? '<span class="missing-value">待补录</span>' : C.formatMoney(value);
-    $('catalog-body').innerHTML = slice.length ? slice.map(r => { const diff = C.difference(r); return `<tr><td><button class="code-button" data-query="${esc(r.code)}">${esc(r.code)}</button></td><td class="spec-cell" title="${esc((r.productName || '') + ' ' + r.name)}">${esc(r.name || r.productName || '—')}</td><td class="numeric">${priceCell(r.tmall)}</td><td class="numeric">${priceCell(r.sale)}</td><td class="numeric ${diff === null ? 'missing-value' : diff < 0 ? 'negative-value' : 'positive-value'}">${diff === null ? '—' : C.formatMoney(diff)}</td><td class="last-col"><button class="row-edit" data-edit="${esc(r.code)}" aria-label="编辑 ${esc(r.code)} 的价格">编辑</button></td></tr>`; }).join('') : '<tr><td colspan="6" style="text-align:center;padding:40px">没有符合条件的商品</td></tr>';
+    $('catalog-body').innerHTML = slice.length ? slice.map(r => { const diff = C.difference(r), pricing = C.resolvePricing(r); return `<tr><td><button class="code-button" data-query="${esc(r.code)}">${esc(r.code)}</button></td><td class="spec-cell" title="${esc((r.productName || '') + ' ' + r.name)}">${esc(r.name || r.productName || '—')}</td><td class="numeric">${priceCell(r.tmall)}</td><td class="numeric">${saleMarkup(pricing)}</td><td class="numeric ${diff === null ? 'missing-value' : diff < 0 ? 'negative-value' : 'positive-value'}">${diff === null ? '—' : C.formatMoney(diff)}</td><td class="last-col"><button class="row-edit" data-edit="${esc(r.code)}" aria-label="编辑 ${esc(r.code)} 的价格">编辑</button></td></tr>`; }).join('') : '<tr><td colspan="6" style="text-align:center;padding:40px">没有符合条件的商品</td></tr>';
     $('table-summary').textContent = `共 ${list.length.toLocaleString()} 条 · 每页 ${size} 条`;
     $('page-number').textContent = `${page} / ${pages}`; $('prev-page').disabled = page === 1; $('next-page').disabled = page === pages;
   }
@@ -108,7 +128,7 @@
       $('copy-name-reduction').title = missingNames ? `第 ${missingNameRows.slice(0, 8).join('、')}${missingNames > 8 ? ' 等' : ''} 行缺少天猫 SKU 名称，请补充后复制` : success !== batchResults.length ? '有尚未计算的 SKU，请先核对价格或编码' : '一次复制名称和减钱两列，每个 SKU 一行，不含表头';
       $('copy-reduction').disabled = !batchResults.length || success !== batchResults.length;
       $('copy-reduction').title = batchResults.length && success !== batchResults.length ? '有尚未计算的 SKU，请先核对价格或编码，以免复制后行序错位' : '仅复制金额，每行一个，不含表头，保持当前 SKU 顺序';
-      $('batch-body').innerHTML = batchResults.map((r, index) => `<tr class="${r.difference === null ? 'batch-error-row' : ''}"><td class="batch-sku-name">${r.skuName ? `<strong>${esc(r.skuName)}</strong>` : `<span class="missing-value">未提供天猫 SKU 名称</span>${r.catalogName ? `<small>聚水潭参考规格：${esc(r.catalogName)}</small>` : ''}`}</td><td class="numeric batch-reduction ${r.difference === null ? 'missing-value' : r.difference < 0 ? 'negative-value' : 'positive-value'}">${reductionMarkup(r, index)}</td><td class="batch-code">${esc(r.code)}</td><td class="numeric batch-tmall">${C.formatMoney(r.tmall)}</td><td class="numeric batch-cost">${formatCostDisplay(r.cost)}</td><td class="numeric batch-sale">${C.formatMoney(r.sale)}</td><td class="numeric batch-margin ${r.jstMargin === null ? 'missing-value' : r.jstMargin < 0 ? 'negative-value' : ''}" title="${esc(marginHint(r))}">${formatMargin(r.jstMargin)}</td><td class="batch-match"><span class="batch-status ${r.difference === null ? '' : 'good'}">${esc(r.status)}</span></td></tr>`).join('');
+      $('batch-body').innerHTML = batchResults.map((r, index) => `<tr class="${r.difference === null ? 'batch-error-row' : ''}"><td class="batch-sku-name">${r.skuName ? `<strong>${esc(r.skuName)}</strong>` : `<span class="missing-value">未提供天猫 SKU 名称</span>${r.catalogName ? `<small>聚水潭参考规格：${esc(r.catalogName)}</small>` : ''}`}</td><td class="numeric batch-reduction ${r.difference === null ? 'missing-value' : r.difference < 0 ? 'negative-value' : 'positive-value'}">${reductionMarkup(r, index)}</td><td class="batch-code">${esc(r.code)}</td><td class="numeric batch-tmall">${C.formatMoney(r.tmall)}</td><td class="numeric batch-correction${r.correctedTmall === null ? ' is-empty' : ''}"${r.correctedTmall === null ? '' : ' title="聚水潭卖价 ÷ 0.55，仅对减钱为负数的 SKU 显示"'}>${r.correctedTmall === null ? '' : C.formatMoney(r.correctedTmall)}</td><td class="numeric batch-cost">${formatCostDisplay(r.cost)}</td><td class="numeric batch-sale">${saleMarkup(r)}</td><td class="numeric batch-margin ${r.jstMargin === null ? 'missing-value' : r.jstMargin < 0 ? 'negative-value' : ''}" title="${esc(marginHint(r))}">${formatMargin(r.jstMargin)}</td><td class="batch-match"><span class="batch-status ${r.difference === null ? '' : 'good'}">${esc(r.status)}</span></td></tr>`).join('');
     } catch (e) { batchResults = []; $('batch-count').textContent = '0'; $('batch-summary').textContent = e.message; $('copy-results').disabled = true; $('copy-reduction').disabled = true; $('copy-name-reduction').disabled = true; $('batch-empty').hidden = false; $('batch-table-wrap').hidden = true; }
   }
   $('tmall-paste').addEventListener('input', () => { clearTimeout(batchTimer); $('copy-results').disabled = true; $('copy-reduction').disabled = true; $('copy-name-reduction').disabled = true; $('batch-body').querySelectorAll('[data-copy-reduction-row]').forEach(button => button.disabled = true); batchTimer = setTimeout(calculateBatch, 150); });
@@ -117,7 +137,7 @@
   $('fill-example').addEventListener('click', () => { $('tmall-paste').value = "SKU\t价格\tsku商家编码\n演示小号\t20.00\tDEMO-SKU-001\n演示中号\t30.00\tDEMO-SKU-002\n演示大号\t40.00\tDEMO-SKU-003\n演示小号✅\t25.00\tDEMO-SKU-001\n演示中号✅\t35.00\tDEMO-SKU-002\n演示大号✅\t45.00\tDEMO-SKU-003"; calculateBatch(); });
   $('copy-results').addEventListener('click', async () => {
     const tsvCell = value => { const text = String(value ?? ''); return /["\t\r\n]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text; };
-    const output = [['天猫SKU名称', '减钱', 'SKU商家编码', '天猫价格', '聚水潭成本', '聚水潭卖价', '聚水潭毛利', '匹配状态'], ...batchResults.map(r => [r.skuName, C.formatMoney(r.difference), r.code, C.formatMoney(r.tmall), formatCostDisplay(r.cost), C.formatMoney(r.sale), formatMargin(r.jstMargin), r.status])].map(r => r.map(tsvCell).join('\t')).join('\n');
+    const output = [['天猫SKU名称', '减钱', 'SKU商家编码', '天猫价格', '一口价更正', '聚水潭成本', '聚水潭卖价', '聚水潭毛利', '匹配状态', '商品类型', '卖价来源'], ...batchResults.map(r => [r.skuName, C.formatMoney(r.difference), r.code, C.formatMoney(r.tmall), r.correctedTmall === null ? '' : C.formatMoney(r.correctedTmall), formatCostDisplay(r.cost), C.formatMoney(r.sale), formatMargin(r.jstMargin), r.status, r.kind === 'bundle' ? '组合装' : '普通商品', r.priceSource])].map(r => r.map(tsvCell).join('\t')).join('\n');
     try { await navigator.clipboard.writeText(output); toast('计算结果已复制，可直接粘贴到表格'); }
     catch { toast('浏览器未允许复制，请选中结果表后复制。'); }
   });
@@ -154,10 +174,19 @@
     const row = isNew ? null : lookup.get(C.normalize(code));
     $('edit-original').value = row?.code || ''; $('edit-code').value = row?.code || code;
     $('edit-code').readOnly = !!row; $('edit-name').value = row?.name || '';
-    $('edit-tmall').value = formatInput(row?.tmall); $('edit-sale').value = formatInput(row?.sale); $('edit-cost').value = formatCost(row?.cost);
+    $('edit-tmall').value = formatInput(row?.tmall); $('edit-sale').value = formatInput(C.resolvePricing(row).sale); $('edit-cost').value = formatCost(row?.cost);
+    $('edit-kind').value = row?.kind === 'bundle' ? 'bundle' : 'single'; syncEditPricing();
     $('edit-title').textContent = row ? '编辑商品价格' : '新增商品'; $('edit-error').textContent = ''; $('edit-dialog').showModal();
-    if (row?.tmall === null) $('edit-tmall').focus(); else if (row) $('edit-name').focus();
+    if (row?.kind === 'bundle' && row.cost === null) $('edit-cost').focus(); else if (row?.tmall === null) $('edit-tmall').focus(); else if (row) $('edit-name').focus();
   }
+  function syncEditPricing() {
+    const bundle = $('edit-kind').value === 'bundle';
+    $('edit-sale').readOnly = bundle; $('edit-price-rule').hidden = !bundle;
+    $('edit-cost-title').textContent = bundle ? '组合成本价（元，缺失则暂不计算）' : '聚水潭成本价（元，可选）';
+    if (bundle) { try { $('edit-sale').value = formatInput(C.bundleSaleFromCost(C.parseMoney($('edit-cost').value, 4))); } catch { $('edit-sale').value = ''; } }
+  }
+  $('edit-kind').addEventListener('change', syncEditPricing);
+  $('edit-cost').addEventListener('input', syncEditPricing);
   $('edit-form').addEventListener('submit', async event => {
     event.preventDefault(); $('edit-error').textContent = '';
     try {
@@ -165,8 +194,11 @@
       if (!code || /[\r\n\t]/.test(code)) throw new Error('请填写有效的商品编码');
       if (!original && lookup.has(C.normalize(code))) throw new Error('这个编码已存在，请从商品表中编辑该商品');
       const prior = lookup.get(C.normalize(original)) || {};
-      const item = { ...prior, code, name: $('edit-name').value.trim(), tmall: C.parseMoney($('edit-tmall').value), sale: C.parseMoney($('edit-sale').value), cost: C.parseMoney($('edit-cost').value, 4) };
-      if (item.tmall !== prior.tmall) item.tmallSource = '手动补录'; if (item.sale !== prior.sale) item.jstSource = '手动补录';
+      const kind = $('edit-kind').value, cost = C.parseMoney($('edit-cost').value, 4);
+      const item = { ...prior, code, kind, name: $('edit-name').value.trim(), tmall: C.parseMoney($('edit-tmall').value), sale: kind === 'bundle' ? C.bundleSaleFromCost(cost) : C.parseMoney($('edit-sale').value), cost };
+      if (item.tmall !== prior.tmall) item.tmallSource = '手动补录';
+      if (kind === 'bundle') { item.jstSource = '组合成本 ÷ 0.3 计算'; item.priceRule = 'cost-divide-0.3'; item.costSource = '组合成本价'; }
+      else if (item.sale !== prior.sale || prior.kind === 'bundle') item.jstSource = '手动补录';
       if (original) records = records.map(r => C.normalize(r.code) === C.normalize(original) ? item : r); else records.push(item);
       $('edit-dialog').close(); $('sku-input').value = code; page = 1; refresh(); if (await persist()) { toast('商品价格已保存'); refresh(); }
     } catch (e) { $('edit-error').textContent = e.message; }
@@ -174,37 +206,44 @@
   function clearPreview() { pendingImport = null; $('import-preview').hidden = true; $('confirm-import').disabled = true; $('import-error').textContent = ''; }
   function sourceHelp() {
     const source = $('import-source').value;
-    $('source-help').textContent = source === 'jst' ? '匹配「商品编码」与「卖价」。成本价可一并保存，不参与减钱计算。' : source === 'tmall' ? '匹配「SKU 商家编码」与该 SKU 的「一口价 / 价格」。每个编码单独一行。' : '用于恢复本工具导出的备份，包含两边价格及可选成本价。';
+    $('source-help').textContent = source === 'bundle' ? '读取「组合商品编码」和「组合成本价」，卖价按成本 ÷ 0.3 计算；缺失成本保留待补。' : source === 'jst' ? '普通商品匹配「商品编码」与原「卖价」，不按成本重算。' : source === 'tmall' ? '匹配「SKU 商家编码」与该 SKU 的「一口价 / 价格」。每个编码单独一行。' : '恢复本工具备份，包含商品类型；组合装继续按成本 ÷ 0.3 计算。';
   }
   function openImport() { sourceHelp(); $('import-dialog').showModal(); }
   function fillHeaders() {
     clearPreview();
     if (!matrix.length) throw new Error('未读到表格内容');
     const headers = matrix[headerRow] || [];
-    const source = $('import-source').value, fields = source === 'jst' ? ['code', 'sale', 'cost', 'name'] : source === 'tmall' ? ['code', 'tmall', 'name'] : ['code', 'tmall', 'sale', 'cost', 'name'];
-    const titles = { code: '商品编码', name: '规格名称（可选）', tmall: '天猫一口价', sale: '聚水潭卖价', cost: '成本价（可选）' };
+    const source = $('import-source').value, fields = source === 'bundle' ? ['code', 'cost', 'name'] : source === 'jst' ? ['code', 'sale', 'cost', 'name'] : source === 'tmall' ? ['code', 'tmall', 'name'] : ['code', 'tmall', 'sale', 'cost', 'name', 'kind'];
+    const titles = { code: source === 'bundle' ? '组合商品编码' : '商品编码', name: '规格名称（可选）', tmall: '天猫一口价', sale: '聚水潭卖价', cost: source === 'bundle' ? '组合成本价' : '成本价（可选）', kind: '商品类型（备份）' };
     $('mapping-fields').innerHTML = fields.map(field => `<label class="field">${titles[field]}<select data-map="${field}"><option value="-1">不导入此列</option>${headers.map((h, i) => `<option value="${i}">${i + 1}. ${esc(String(h || '（空表头）'))}</option>`).join('')}</select></label>`).join('');
     document.querySelectorAll('[data-map]').forEach(select => select.value = String(C.findColumn(headers, select.dataset.map, source)));
     $('import-mapping').hidden = false;
   }
   function setMatrix(rows, name) {
-    matrix = rows; importName = name; headerRow = C.detectHeader(rows, $('import-source').value);
+    matrix = rows; importName = name;
+    const firstRows = rows.slice(0, 30);
+    if (firstRows.some(row => row.some(value => ['组合商品编码', '组合装商品编码', '组合编码', '组合装编码'].includes(C.normalize(value))))) $('import-source').value = 'bundle';
+    else if (firstRows.some(row => C.findColumn(row, 'kind', 'combined') >= 0)) $('import-source').value = 'combined';
+    else if (firstRows.some(row => C.findColumn(row, 'sale', 'jst') >= 0) && $('import-source').value === 'bundle') $('import-source').value = 'jst';
+    sourceHelp(); headerRow = C.detectHeader(rows, $('import-source').value);
     $('header-select').innerHTML = rows.slice(0, 30).map((r, i) => `<option value="${i}">第 ${i + 1} 行：${esc(r.slice(0, 4).join(' / ').slice(0, 65))}</option>`).join('');
     $('header-select').value = String(headerRow); fillHeaders();
   }
   function prepareImport() {
     clearPreview();
     try {
-      const map = { code: -1, name: -1, sale: -1, cost: -1, tmall: -1 };
+      const map = { code: -1, name: -1, sale: -1, cost: -1, tmall: -1, kind: -1 };
       document.querySelectorAll('[data-map]').forEach(select => map[select.dataset.map] = Number(select.value));
       const result = C.buildImport(matrix.slice(headerRow + 1), map, $('import-source').value, records, importName || '粘贴导入');
       pendingImport = result;
-      $('import-summary').textContent = `可导入 ${result.preview.length.toLocaleString()} 个编码：新增 ${result.added.toLocaleString()} 个，更新 ${result.changed.toLocaleString()} 个。${result.skipped ? `跳过 ${result.skipped} 行（缺编码或所需价格）。` : ''}${result.repeated ? `合并 ${result.repeated} 行相同价格的重复编码。` : ''}`;
+      const bundleImport = $('import-source').value === 'bundle', missingBundleCosts = result.preview.filter(r => r.kind === 'bundle' && r.cost == null).length;
+      $('import-summary').textContent = `可导入 ${result.preview.length.toLocaleString()} 个编码：新增 ${result.added.toLocaleString()} 个，更新 ${result.changed.toLocaleString()} 个。${result.skipped ? `跳过 ${result.skipped} 行（缺编码或所需价格）。` : ''}${result.repeated ? (bundleImport ? `合并 ${result.repeated} 行组成明细，组合成本不重复累加。` : `合并 ${result.repeated} 行相同价格的重复编码。`) : ''}${missingBundleCosts ? `${missingBundleCosts} 个组合缺成本，保留待补。` : ''}`;
       $('import-problems').textContent = result.problems.slice(0, 8).join('\n') + (result.problems.length > 8 ? `\n另有 ${result.problems.length - 8} 项问题，请核对源表。` : '');
-      const source = $('import-source').value, fields = source === 'jst' ? ['sale', 'cost'] : source === 'tmall' ? ['tmall'] : ['tmall', 'sale', 'cost'];
+      const source = $('import-source').value, fields = source === 'bundle' ? ['cost', 'sale'] : source === 'jst' ? ['sale', 'cost'] : source === 'tmall' ? ['tmall'] : ['tmall', 'sale', 'cost'];
       const titles = { sale: '聚水潭卖价', tmall: '天猫一口价', cost: '成本价' };
       $('preview-head').innerHTML = '<tr><th>商品编码</th>' + fields.map(f => `<th class="numeric">${titles[f]}</th>`).join('') + '</tr>';
-      $('preview-body').innerHTML = result.preview.slice(0, 6).map(r => `<tr><td>${esc(r.code)}</td>${fields.map(f => `<td class="numeric">${r[f] === undefined ? '保留原值' : f === 'cost' ? formatCost(r[f]) : C.formatMoney(r[f])}</td>`).join('')}</tr>`).join('');
+      $('preview-body').innerHTML = result.preview.slice(0, 6).map(r => `<tr><td>${esc(r.code)}</td>${fields.map(f => `<td class="numeric">${r[f] === undefined ? '保留原值' : f === 'cost' ? formatCostDisplay(r[f]) : C.formatMoney(r[f])}</td>`).join('')}</tr>`).join('');
+      $('import-note').textContent = bundleImport ? '以表内组合成本价为准。相同组合的多行子件只计一次总成本；缺失成本保留待补，不使用基本售价或子件售价。' : '普通商品空白价格保留原值；备份中的组合装保留类型并重算卖价。编码类型或价格冲突时暂停整批导入。';
       $('import-preview').hidden = false; $('confirm-import').disabled = !!result.problems.length || !result.preview.length;
     } catch (e) { $('import-error').textContent = e.message; }
   }
@@ -255,7 +294,7 @@
   });
   $('export-data').addEventListener('click', () => {
     const csvCell = value => '"' + String(value ?? '').replace(/"/g, '""') + '"';
-    const rows = [['商品编码', '规格名称', '天猫一口价', '聚水潭卖价', '聚水潭成本价'], ...records.map(r => [r.code, r.name, formatInput(r.tmall), formatInput(r.sale), formatCost(r.cost)])];
+    const rows = [['商品编码', '规格名称', '天猫一口价', '聚水潭卖价', '聚水潭成本价', '商品类型', '卖价来源'], ...records.map(r => { const p = C.resolvePricing(r); return [r.code, r.name, formatInput(r.tmall), formatInput(p.sale), formatCost(p.cost), p.kind === 'bundle' ? '组合装' : '普通商品', p.source]; })];
     const csv = '\uFEFF' + rows.map(row => row.map(csvCell).join(',')).join('\r\n');
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
     const link = document.createElement('a'); link.href = url; link.download = '商品价格备份_' + new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }) + '.csv'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 10000);

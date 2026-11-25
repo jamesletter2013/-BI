@@ -1,6 +1,6 @@
 {
-  "version": "2026-11-25",
-  "calculationSourceSha256": "eeed062b65b12829f5f87411dacfb6829dd9db4b357b7aaff2d4d1e498dd1341",
+  "version": "2026-11-25.2",
+  "calculationSourceSha256": "fc4c03a4d0056236aac1c9aeb1f62a4d73c9a685ff49d6b11522471513178f1c",
   "calculationSourceStart": "  const normalize =",
   "description": "与本地运行版从 normalize 起的完整核心函数逐字一致；仅移除真实 SEED 数据。"
 }

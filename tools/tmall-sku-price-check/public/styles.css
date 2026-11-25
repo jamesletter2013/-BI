@@ -17,3 +17,7 @@
 .batch-results>.section-top{flex-wrap:wrap}.batch-copy-actions{flex-wrap:wrap;max-width:100%}
 
 .paste-heading{flex-wrap:wrap}.paste-heading-actions{display:flex;align-items:center;gap:16px;flex-shrink:0;margin-left:auto}.paste-heading-actions .text-button{padding-top:5px}@media(max-width:580px){.paste-heading .input-label{max-width:none;flex-basis:100%}.paste-heading-actions{width:100%;justify-content:space-between;margin-left:0}.paste-heading-actions #clear-paste{font-size:13px;min-height:36px;padding:7px 12px}}
+
+.price-rule-note{display:block;margin-top:4px;font-size:12px;line-height:1.5;color:#6c8d80;font-weight:400;white-space:nowrap}.field input[readonly]{background:#f2f6f7;color:#637983}.batch-results td.batch-sale{line-height:1.5}@media(max-width:580px){.price-rule-note{font-size:12px;white-space:normal;line-height:1.6}}
+
+.batch-results .batch-correction{color:var(--green);font-weight:650;font-variant-numeric:tabular-nums}@media(max-width:580px){.batch-results td.batch-correction{grid-column:3;grid-row:4}.batch-results td.batch-correction.is-empty{display:none}.batch-results .batch-correction:before{content:"一口价更正";display:block;font-size:12px;font-weight:400;color:#85939e;margin-bottom:6px}}
