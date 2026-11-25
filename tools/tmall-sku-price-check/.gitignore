@@ -1,0 +1,13 @@
+node_modules/
+data/
+private/
+captures/
+outputs/
+public/catalog.js
+public/data/
+.env*
+*.xlsx
+*.xls
+*.zip
+*.log
+.DS_Store

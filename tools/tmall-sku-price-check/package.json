@@ -1,0 +1,12 @@
+{
+  "name": "tmall-sku-price-check",
+  "version": "1.0.0",
+  "private": true,
+  "description": "按天猫 SKU 商家编码匹配聚水潭资料，计算减钱及毛利。",
+  "engines": { "node": ">=22.13.0" },
+  "scripts": {
+    "test": "node --test tests/*.test.cjs",
+    "check": "node scripts/check-release.cjs",
+    "start": "node scripts/serve.cjs"
+  }
+}
